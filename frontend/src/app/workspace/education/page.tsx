@@ -31,6 +31,7 @@ import {
   WorkspaceContainer,
   WorkspaceHeader,
 } from "@/components/workspace/workspace-container";
+import { EducationWorkflowBuilder } from "@/components/workspace/education-workflow-builder";
 import { useEducationActions, useEducationWorkbench } from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
 
@@ -811,6 +812,13 @@ export default function EducationWorkbenchPage() {
                       </Button>
                     ))}
                   </div>
+                  <EducationWorkflowBuilder
+                    value={workflowContent}
+                    onChange={setWorkflowContent}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    高级模式：可直接编辑 JSON（拖拽编排器会同步这些字段）。
+                  </p>
                   <Textarea
                     className="min-h-[280px] font-mono text-xs"
                     value={workflowContent}
