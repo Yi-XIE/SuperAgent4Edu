@@ -1,0 +1,270 @@
+import type { BaseStream } from "@langchain/langgraph-sdk/react";
+import { useParams } from "next/navigation";
+import { useEffect } from "react";
+
+import {
+  Conversation,
+  ConversationContent,
+} from "@/components/ai-elements/conversation";
+import {
+  type EducationCheckpoint,
+  isEducationAgent,
+  parseEducationCheckpoint,
+} from "@/core/education";
+import { useI18n } from "@/core/i18n/hooks";
+import {
+  extractContentFromMessage,
+  extractPresentFilesFromMessage,
+  extractTextFromMessage,
+  groupMessages,
+  hasContent,
+  hasPresentFiles,
+  hasReasoning,
+} from "@/core/messages/utils";
+import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
+import type { Subtask } from "@/core/tasks";
+import { useUpdateSubtask } from "@/core/tasks/context";
+import type { AgentThreadState } from "@/core/threads";
+import { cn } from "@/lib/utils";
+
+import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { StreamingIndicator } from "../streaming-indicator";
+
+import { EducationArtifactSummary } from "./education-artifact-summary";
+import { EducationCheckpointCard } from "./education-checkpoint-card";
+import { MarkdownContent } from "./markdown-content";
+import { MessageGroup } from "./message-group";
+import { MessageListItem } from "./message-list-item";
+import { MessageListSkeleton } from "./skeleton";
+import { SubtaskCard } from "./subtask-card";
+
+export function MessageList({
+  className,
+  threadId,
+  thread,
+  paddingBottom = 160,
+  onClarificationOptionSelect,
+}: {
+  className?: string;
+  threadId: string;
+  thread: BaseStream<AgentThreadState>;
+  paddingBottom?: number;
+  onClarificationOptionSelect?: (
+    value: string,
+    checkpoint: EducationCheckpoint,
+  ) => Promise<void> | void;
+}) {
+  const { t } = useI18n();
+  const { agent_name } = useParams<{ agent_name?: string }>();
+  const isEducationStudio = isEducationAgent(agent_name);
+  const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
+  const updateSubtask = useUpdateSubtask();
+  const messages = thread.messages;
+
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.type === "ai") {
+        for (const toolCall of message.tool_calls ?? []) {
+          if (toolCall.name === "task" && toolCall.id) {
+            updateSubtask({
+              id: toolCall.id,
+              subagent_type: toolCall.args.subagent_type,
+              description: toolCall.args.description,
+              prompt: toolCall.args.prompt,
+              status: "in_progress",
+            });
+          }
+        }
+        continue;
+      }
+
+      if (message.type !== "tool") {
+        continue;
+      }
+
+      const taskId = message.tool_call_id;
+      if (!taskId) {
+        continue;
+      }
+
+      const result = extractTextFromMessage(message);
+      if (result.startsWith("Task Succeeded. Result:")) {
+        updateSubtask({
+          id: taskId,
+          status: "completed",
+          result: result.split("Task Succeeded. Result:")[1]?.trim(),
+        });
+      } else if (result.startsWith("Task failed.")) {
+        updateSubtask({
+          id: taskId,
+          status: "failed",
+          error: result.split("Task failed.")[1]?.trim(),
+        });
+      } else if (result.startsWith("Task timed out")) {
+        updateSubtask({
+          id: taskId,
+          status: "failed",
+          error: result,
+        });
+      } else {
+        updateSubtask({
+          id: taskId,
+          status: "in_progress",
+        });
+      }
+    }
+  }, [messages, updateSubtask]);
+
+  if (thread.isThreadLoading && messages.length === 0) {
+    return <MessageListSkeleton />;
+  }
+  return (
+    <Conversation
+      className={cn("flex size-full flex-col justify-center", className)}
+    >
+      <ConversationContent className="mx-auto w-full max-w-(--container-width-md) gap-8 pt-12">
+        {groupMessages(messages, (group) => {
+          if (group.type === "human" || group.type === "assistant") {
+            return group.messages.map((msg) => {
+              return (
+                <MessageListItem
+                  key={`${group.id}/${msg.id}`}
+                  message={msg}
+                  isLoading={thread.isLoading}
+                />
+              );
+            });
+          } else if (group.type === "assistant:clarification") {
+            const message = group.messages[0];
+            if (message && hasContent(message)) {
+              const content = extractContentFromMessage(message);
+              const checkpoint =
+                isEducationStudio &&
+                onClarificationOptionSelect &&
+                parseEducationCheckpoint(content);
+              if (checkpoint) {
+                return (
+                  <EducationCheckpointCard
+                    key={group.id}
+                    checkpoint={checkpoint}
+                    threadId={threadId}
+                    disabled={thread.isLoading}
+                    onSelect={onClarificationOptionSelect}
+                  />
+                );
+              }
+              return (
+                <MarkdownContent
+                  key={group.id}
+                  content={content}
+                  isLoading={thread.isLoading}
+                  rehypePlugins={rehypePlugins}
+                />
+              );
+            }
+            return null;
+          } else if (group.type === "assistant:present-files") {
+            const files: string[] = [];
+            for (const message of group.messages) {
+              if (hasPresentFiles(message)) {
+                const presentFiles = extractPresentFilesFromMessage(message);
+                files.push(...presentFiles);
+              }
+            }
+            const manifestPath = files.find((file) =>
+              file.endsWith("/artifact-manifest.json"),
+            );
+            return (
+              <div className="w-full" key={group.id}>
+                {isEducationStudio && manifestPath && (
+                  <EducationArtifactSummary
+                    manifestPath={manifestPath}
+                    threadId={threadId}
+                  />
+                )}
+                {group.messages[0] && hasContent(group.messages[0]) && (
+                  <MarkdownContent
+                    content={extractContentFromMessage(group.messages[0])}
+                    isLoading={thread.isLoading}
+                    rehypePlugins={rehypePlugins}
+                    className="mb-4"
+                  />
+                )}
+                <ArtifactFileList files={files} threadId={threadId} />
+              </div>
+            );
+          } else if (group.type === "assistant:subagent") {
+            const tasks = new Set<Subtask>();
+            for (const message of group.messages) {
+              if (message.type === "ai") {
+                for (const toolCall of message.tool_calls ?? []) {
+                  if (toolCall.name === "task") {
+                    const task: Subtask = {
+                      id: toolCall.id!,
+                      subagent_type: toolCall.args.subagent_type,
+                      description: toolCall.args.description,
+                      prompt: toolCall.args.prompt,
+                      status: "in_progress",
+                    };
+                    tasks.add(task);
+                  }
+                }
+              }
+            }
+            const results: React.ReactNode[] = [];
+            for (const message of group.messages.filter(
+              (message) => message.type === "ai",
+            )) {
+              if (hasReasoning(message)) {
+                results.push(
+                  <MessageGroup
+                    key={"thinking-group-" + message.id}
+                    messages={[message]}
+                    isLoading={thread.isLoading}
+                  />,
+                );
+              }
+              results.push(
+                <div
+                  key={"subtask-count-" + message.id}
+                  className="text-muted-foreground font-norma pt-2 text-sm"
+                >
+                  {t.subtasks.executing(tasks.size)}
+                </div>,
+              );
+              const taskIds = message.tool_calls?.map(
+                (toolCall) => toolCall.id,
+              );
+              for (const taskId of taskIds ?? []) {
+                results.push(
+                  <SubtaskCard
+                    key={"task-group-" + taskId}
+                    taskId={taskId!}
+                    isLoading={thread.isLoading}
+                  />,
+                );
+              }
+            }
+            return (
+              <div
+                key={"subtask-group-" + group.id}
+                className="relative z-1 flex flex-col gap-2"
+              >
+                {results}
+              </div>
+            );
+          }
+          return (
+            <MessageGroup
+              key={"group-" + group.id}
+              messages={group.messages}
+              isLoading={thread.isLoading}
+            />
+          );
+        })}
+        {thread.isLoading && <StreamingIndicator className="my-4" />}
+        <div style={{ height: `${paddingBottom}px` }} />
+      </ConversationContent>
+    </Conversation>
+  );
+}
