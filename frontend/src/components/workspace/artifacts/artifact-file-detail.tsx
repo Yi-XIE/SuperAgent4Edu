@@ -83,7 +83,7 @@ export function ArtifactFileDetail({
   const isSupportPreview = useMemo(() => {
     return language === "html" || language === "markdown";
   }, [language]);
-  const { content } = useArtifactContent({
+  const { content, error, isLoading } = useArtifactContent({
     threadId,
     filepath: filepathFromProps,
     enabled: isCodeFile && !isWriteFile,
@@ -244,11 +244,24 @@ export function ArtifactFileDetail({
             />
           )}
         {isCodeFile && viewMode === "code" && (
-          <CodeEditor
-            className="size-full resize-none rounded-none border-none"
-            value={displayContent ?? ""}
-            readonly
-          />
+          <>
+            {isLoading && (
+              <div className="text-muted-foreground px-4 py-3 text-sm">
+                Loading artifact content...
+              </div>
+            )}
+            {error && (
+              <div className="text-destructive px-4 py-3 text-sm">
+                Failed to load artifact content. Please use Open in new window
+                or Download.
+              </div>
+            )}
+            <CodeEditor
+              className="size-full resize-none rounded-none border-none"
+              value={displayContent ?? ""}
+              readonly
+            />
+          </>
         )}
         {!isCodeFile && (
           <iframe

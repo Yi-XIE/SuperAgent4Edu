@@ -34,7 +34,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 ### Source Layout (`src/`)
 
-- **`app/`** — Next.js App Router. Routes: `/` (landing), `/workspace/chats/[thread_id]` (chat).
+- **`app/`** — Next.js App Router. Routes: `/` (landing), `/workspace/chats/[thread_id]` (chat), `/workspace/agents/[agent_name]/chats/[thread_id]` (custom-agent chat).
 - **`components/`** — React components split into:
   - `ui/` — Shadcn UI primitives (auto-generated, ESLint-ignored)
   - `ai-elements/` — Vercel AI SDK elements (auto-generated, ESLint-ignored)
@@ -47,6 +47,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
   - `i18n/` — Internationalization (en-US, zh-CN)
   - `settings/` — User preferences in localStorage
   - `memory/` — Persistent user memory system
+  - `education/` — Agent-specific education utilities (checkpoint parsing, reviewer-summary parsing, manifest parsing, task labels including `Reviewer`)
   - `skills/` — Skills installation and management
   - `messages/` — Message processing and transformation
   - `mcp/` — Model Context Protocol integration
@@ -62,6 +63,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 2. Stream events update thread state (messages, artifacts, todos)
 3. TanStack Query manages server state; localStorage stores user settings
 4. Components subscribe to thread state and render updates
+5. Agent-specific overlays can layer on top of the shared workspace route without introducing a separate product shell
 
 ### Key Patterns
 
@@ -69,6 +71,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 - **Thread hooks** (`useThreadStream`, `useSubmitThread`, `useThreads`) are the primary API interface
 - **LangGraph client** is a singleton obtained via `getAPIClient()` in `core/api/`
 - **Environment validation** uses `@t3-oss/env-nextjs` with Zod schemas (`src/env.js`). Skip with `SKIP_ENV_VALIDATION=1`
+- Prefer extending the existing agent chat route before building a new workspace page. The `education-course-studio` demo uses this pattern for approval cards, manifest summaries, and agent-specific welcome content.
 
 ## Code Style
 

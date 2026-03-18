@@ -1,5 +1,6 @@
 """Middleware for automatic thread title generation."""
 
+import asyncio
 from typing import NotRequired, override
 
 from langchain.agents import AgentState
@@ -79,6 +80,11 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             if len(user_msg) > fallback_chars:
                 return user_msg[:fallback_chars].rstrip() + "..."
             return user_msg if user_msg else "New Conversation"
+
+    @override
+    def after_model(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:
+        """Sync bridge for runtimes that invoke middleware in synchronous mode."""
+        return asyncio.run(self.aafter_model(state, runtime))
 
     @override
     async def aafter_model(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:

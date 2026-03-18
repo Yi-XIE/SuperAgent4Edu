@@ -76,6 +76,7 @@ make check      # Check system requirements
 make install    # Install all dependencies (frontend + backend)
 make dev        # Start all services (LangGraph + Gateway + Frontend + Nginx), with config.yaml preflight
 make stop       # Stop all services
+./scripts/sync-education-assets.sh  # Validate + sync education-course-studio assets into ${DEER_FLOW_HOME:-backend/.deer-flow}/agents
 ```
 
 **Backend directory** (for backend development only):
@@ -234,6 +235,17 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - **Loading**: `load_skills()` recursively scans `skills/{public,custom}` for `SKILL.md`, parses metadata, and reads enabled state from extensions_config.json
 - **Injection**: Enabled skills listed in agent system prompt with container paths
 - **Installation**: `POST /api/skills/install` extracts .skill ZIP archive to custom/ directory
+- **Local demo pack**: the repo may also contain local-only `skills/custom/*` contracts for custom agents. The `education-course-studio` agent uses this pattern for its UbD/PBL stages, reviewer stage, and learning-kit appendix workflow.
+
+### Custom Agent Runtime Assets
+
+- Source of truth for the education demo agent is `deer-flow/agents/education-course-studio/`.
+- Runtime lookup still uses `${DEER_FLOW_HOME:-backend/.deer-flow}/agents/`.
+- `scripts/sync-education-assets.sh` is the required bridge. It performs fail-fast checks for:
+  - `agents/education-course-studio/config.yaml`
+  - `agents/education-course-studio/SOUL.md`
+  - 7 required `skills/custom/*/SKILL.md` contracts
+- Both `scripts/serve.sh` and `scripts/deploy.sh` call this sync step before startup.
 
 ### Model Factory (`src/models/factory.py`)
 
@@ -287,6 +299,21 @@ Bridges external messaging platforms (Feishu, Slack, Telegram) to the DeerFlow a
 3. Background thread invokes LLM to extract context updates and facts
 4. Applies updates atomically (temp file + rename) with cache invalidation
 5. Next interaction injects top 15 facts + context into `<memory>` tags in system prompt
+
+**Agent-specific behavior**:
+- Memory is scoped per custom agent when `agent_name` is present in runtime config
+- `education-course-studio` adds extra memory guidance for `teacher_preference`, `course_continuity`, `learning_kit_preference`, and `team_template`
+- Its prompt injection also surfaces a short `Education Signals` section from those fact categories
+
+### Custom Agent Notes
+
+- Filesystem custom agents live under `agents/{agent_name}/config.yaml` + `SOUL.md`
+- `education-course-studio` is a reference implementation for:
+  - lead-agent-only HITL via `ask_clarification`
+  - fixed subagent orchestration using the existing `task` tool
+  - reviewer quality gating (`Presentation -> Reviewer -> checkpoint 3`) without adding new backend APIs
+  - agent-scoped memory
+  - tool-group inheritance from parent agent to delegated subagents
 
 **Configuration** (`config.yaml` → `memory`):
 - `enabled` / `injection_enabled` - Master switches

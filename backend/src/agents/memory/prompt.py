@@ -10,6 +10,15 @@ try:
 except ImportError:
     TIKTOKEN_AVAILABLE = False
 
+EDUCATION_AGENT_NAME = "education-course-studio"
+EDUCATION_FACT_CATEGORIES = (
+    "teacher_preference",
+    "course_continuity",
+    "learning_kit_preference",
+    "team_template",
+)
+
+
 # Prompt template for updating memory based on conversation
 MEMORY_UPDATE_PROMPT = """You are a memory management system. Your task is to analyze a conversation and update the user's memory profile.
 
@@ -116,6 +125,22 @@ Important Rules:
 Return ONLY valid JSON, no explanation or markdown."""
 
 
+EDUCATION_MEMORY_APPENDIX = """
+
+Education Agent Rules:
+- This conversation belongs to an elementary-school course design studio for teachers.
+- Prioritize durable facts that improve future course design quality.
+- Use ONLY these fact categories in `newFacts`:
+  * teacher_preference: Stable teacher preferences about tone, pedagogy, grade level, classroom structure, deliverable style
+  * course_continuity: Reusable facts about past or ongoing units, sequencing, repeated topics, avoided duplication
+  * learning_kit_preference: Stable preferences or constraints about materials, procurement, safety, fabrication level, classroom operations
+  * team_template: Reusable team-level templates, norms, institutional patterns, or shared standards
+- Do NOT store transient approval states, temporary rework requests, or one-off intermediate status updates.
+- Prefer concrete, reusable education facts over generic statements.
+- If the user changes a stable teaching preference, remove outdated facts that conflict with the new preference.
+"""
+
+
 # Prompt template for extracting facts from a single message
 FACT_EXTRACTION_PROMPT = """Extract factual information about the user from this message.
 
@@ -166,7 +191,48 @@ def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
         return len(text) // 4
 
 
-def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2000) -> str:
+def get_memory_update_prompt(agent_name: str | None = None) -> str:
+    """Return the memory update prompt, with agent-specific guidance when needed."""
+    if agent_name == EDUCATION_AGENT_NAME:
+        return MEMORY_UPDATE_PROMPT + EDUCATION_MEMORY_APPENDIX
+    return MEMORY_UPDATE_PROMPT
+
+
+def _format_education_facts(memory_data: dict[str, Any]) -> str:
+    """Format the most useful education-specific facts for prompt injection."""
+    facts = [
+        fact
+        for fact in memory_data.get("facts", [])
+        if fact.get("category") in EDUCATION_FACT_CATEGORIES and fact.get("content")
+    ]
+    if not facts:
+        return ""
+
+    facts = sorted(
+        facts,
+        key=lambda fact: (fact.get("confidence", 0), fact.get("createdAt", "")),
+        reverse=True,
+    )[:6]
+
+    category_labels = {
+        "teacher_preference": "Teacher Preference",
+        "course_continuity": "Course Continuity",
+        "learning_kit_preference": "Learning Kit Preference",
+        "team_template": "Team Template",
+    }
+
+    fact_lines = [
+        f"- {category_labels.get(fact.get('category', ''), 'Education Signal')}: {fact['content']}"
+        for fact in facts
+    ]
+    return "Education Signals:\n" + "\n".join(fact_lines)
+
+
+def format_memory_for_injection(
+    memory_data: dict[str, Any],
+    max_tokens: int = 2000,
+    agent_name: str | None = None,
+) -> str:
     """Format memory data for injection into system prompt.
 
     Args:
@@ -216,6 +282,11 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
 
         if history_sections:
             sections.append("History:\n" + "\n".join(f"- {s}" for s in history_sections))
+
+    if agent_name == EDUCATION_AGENT_NAME:
+        education_facts = _format_education_facts(memory_data)
+        if education_facts:
+            sections.append(education_facts)
 
     if not sections:
         return ""

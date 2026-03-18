@@ -175,6 +175,8 @@ class DeerFlowClient:
             "thinking_enabled": overrides.get("thinking_enabled", self._thinking_enabled),
             "is_plan_mode": overrides.get("plan_mode", self._plan_mode),
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
+            "max_concurrent_subagents": overrides.get("max_concurrent_subagents", 3),
+            "agent_name": overrides.get("agent_name"),
         }
         return RunnableConfig(
             configurable=configurable,
@@ -189,6 +191,8 @@ class DeerFlowClient:
             cfg.get("thinking_enabled"),
             cfg.get("is_plan_mode"),
             cfg.get("subagent_enabled"),
+            cfg.get("max_concurrent_subagents"),
+            cfg.get("agent_name"),
         )
 
         if self._agent is not None and self._agent_config_key == key:
@@ -198,14 +202,18 @@ class DeerFlowClient:
         model_name = cfg.get("model_name")
         subagent_enabled = cfg.get("subagent_enabled", False)
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
+        thread_id = cfg.get("thread_id")
+        agent_name = cfg.get("agent_name")
 
         kwargs: dict[str, Any] = {
             "model": create_chat_model(name=model_name, thinking_enabled=thinking_enabled),
             "tools": self._get_tools(model_name=model_name, subagent_enabled=subagent_enabled),
-            "middleware": _build_middlewares(config, model_name=model_name),
+            "middleware": _build_middlewares(config, model_name=model_name, agent_name=agent_name),
             "system_prompt": apply_prompt_template(
                 subagent_enabled=subagent_enabled,
                 max_concurrent_subagents=max_concurrent_subagents,
+                agent_name=agent_name,
+                run_id=thread_id,
             ),
             "state_schema": ThreadState,
         }

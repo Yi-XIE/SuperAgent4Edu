@@ -282,7 +282,7 @@ Recent breakthroughs in language models have also accelerated progress
 """
 
 
-def _get_memory_context(agent_name: str | None = None) -> str:
+def _get_memory_context(agent_name: str | None = None, run_id: str | None = None) -> str:
     """Get memory context for injection into system prompt.
 
     Args:
@@ -294,13 +294,25 @@ def _get_memory_context(agent_name: str | None = None) -> str:
     try:
         from src.agents.memory import format_memory_for_injection, get_memory_data
         from src.config.memory_config import get_memory_config
+        from src.education.signals import extract_education_signals, record_used_signals
 
         config = get_memory_config()
         if not config.enabled or not config.injection_enabled:
             return ""
 
         memory_data = get_memory_data(agent_name)
-        memory_content = format_memory_for_injection(memory_data, max_tokens=config.max_injection_tokens)
+        memory_content = format_memory_for_injection(
+            memory_data,
+            max_tokens=config.max_injection_tokens,
+            agent_name=agent_name,
+        )
+
+        # Persist run-level signal usage for education-course-studio.
+        # `run_id` maps to current thread_id for traceability.
+        if agent_name == "education-course-studio" and run_id:
+            signals = extract_education_signals(memory_data)
+            if signals:
+                record_used_signals(run_id, signals, source="memory_injection")
 
         if not memory_content.strip():
             return ""
@@ -366,9 +378,16 @@ def get_agent_soul(agent_name: str | None) -> str:
     return ""
 
 
-def apply_prompt_template(subagent_enabled: bool = False, max_concurrent_subagents: int = 3, *, agent_name: str | None = None, available_skills: set[str] | None = None) -> str:
+def apply_prompt_template(
+    subagent_enabled: bool = False,
+    max_concurrent_subagents: int = 3,
+    *,
+    agent_name: str | None = None,
+    available_skills: set[str] | None = None,
+    run_id: str | None = None,
+) -> str:
     # Get memory context
-    memory_context = _get_memory_context(agent_name)
+    memory_context = _get_memory_context(agent_name, run_id=run_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents

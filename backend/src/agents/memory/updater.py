@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from src.agents.memory.prompt import (
-    MEMORY_UPDATE_PROMPT,
     format_conversation_for_update,
+    get_memory_update_prompt,
 )
 from src.config.memory_config import get_memory_config
 from src.config.paths import get_paths
@@ -261,7 +261,7 @@ class MemoryUpdater:
                 return False
 
             # Build prompt
-            prompt = MEMORY_UPDATE_PROMPT.format(
+            prompt = get_memory_update_prompt(agent_name).format(
                 current_memory=json.dumps(current_memory, indent=2),
                 conversation=conversation_text,
             )

@@ -5,6 +5,7 @@ import {
   Loader2Icon,
   XCircleIcon,
 } from "lucide-react";
+import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
 
@@ -14,8 +15,13 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ShineBorder } from "@/components/ui/shine-border";
+import {
+  getEducationSubtaskMeta,
+  isEducationAgent,
+} from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
 import { hasToolCalls } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
@@ -42,6 +48,15 @@ export function SubtaskCard({
   const [collapsed, setCollapsed] = useState(true);
   const rehypePlugins = useRehypeSplitWordsIntoSpans(isLoading);
   const task = useSubtask(taskId)!;
+  const { agent_name } = useParams<{ agent_name?: string }>();
+  const educationSubtask = useMemo(
+    () =>
+      isEducationAgent(agent_name)
+        ? getEducationSubtaskMeta(task.description, task.prompt)
+        : null,
+    [agent_name, task.description, task.prompt],
+  );
+  const subtaskLabel = educationSubtask?.label ?? task.description;
   const icon = useMemo(() => {
     if (task.status === "completed") {
       return <CheckCircleIcon className="size-3" />;
@@ -81,13 +96,18 @@ export function SubtaskCard({
               <ChainOfThoughtStep
                 className="font-normal"
                 label={
-                  task.status === "in_progress" ? (
-                    <Shimmer duration={3} spread={3}>
-                      {task.description}
-                    </Shimmer>
-                  ) : (
-                    task.description
-                  )
+                  <div className="flex items-center gap-2">
+                    {educationSubtask && (
+                      <Badge variant="secondary">{educationSubtask.stage}</Badge>
+                    )}
+                    {task.status === "in_progress" ? (
+                      <Shimmer duration={3} spread={3}>
+                        {subtaskLabel}
+                      </Shimmer>
+                    ) : (
+                      <span>{subtaskLabel}</span>
+                    )}
+                  </div>
                 }
                 icon={<ClipboardListIcon />}
               ></ChainOfThoughtStep>

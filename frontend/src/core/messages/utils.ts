@@ -1,4 +1,5 @@
 import type { AIMessage, Message } from "@langchain/langgraph-sdk";
+import { parseEducationCheckpoint } from "@/core/education";
 
 interface GenericMessageGroup<T = string> {
   type: T;
@@ -115,7 +116,18 @@ export function groupMessages<T>(
       // Not an else-if: a message with reasoning + content (but no tool calls) goes
       // into the processing group above AND gets its own assistant bubble here.
       if (hasContent(message) && !hasToolCalls(message)) {
-        groups.push({ id: message.id, type: "assistant", messages: [message] });
+        const text = extractTextFromMessage(message);
+        // Fallback: some models return checkpoint text directly instead of
+        // calling ask_clarification. Keep approval cards available in that case.
+        if (parseEducationCheckpoint(text)) {
+          groups.push({
+            id: message.id,
+            type: "assistant:clarification",
+            messages: [message],
+          });
+        } else {
+          groups.push({ id: message.id, type: "assistant", messages: [message] });
+        }
       }
     }
   }

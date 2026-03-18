@@ -1,3 +1,39 @@
-from . import artifacts, mcp, models, skills, suggestions, uploads
+from . import (
+    agents,
+    artifacts,
+    channels,
+    education_audit,
+    education_checkpoints,
+    education_projects,
+    education_runs,
+    memory,
+    mcp,
+    models,
+    orgs,
+    resources,
+    skills,
+    student,
+    suggestions,
+    templates,
+    uploads,
+)
 
-__all__ = ["artifacts", "mcp", "models", "skills", "suggestions", "uploads"]
+__all__ = [
+    "agents",
+    "artifacts",
+    "channels",
+    "education_audit",
+    "education_checkpoints",
+    "education_projects",
+    "education_runs",
+    "memory",
+    "mcp",
+    "models",
+    "orgs",
+    "resources",
+    "skills",
+    "student",
+    "suggestions",
+    "templates",
+    "uploads",
+]

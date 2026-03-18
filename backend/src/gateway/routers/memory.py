@@ -1,12 +1,27 @@
 """Memory API router for retrieving and managing global memory data."""
 
+from typing import Any
+
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from src.agents.memory.updater import get_memory_data, reload_memory_data
 from src.config.memory_config import get_memory_config
+from src.education.schemas import MemorySignalUsage
+from src.education.signals import (
+    extract_education_signals,
+    get_used_signals,
+    record_used_signals,
+)
 
 router = APIRouter(prefix="/api", tags=["memory"])
+EDUCATION_AGENT_NAME = "education-course-studio"
+EDUCATION_FACT_CATEGORIES = {
+    "teacher_preference",
+    "course_continuity",
+    "learning_kit_preference",
+    "team_template",
+}
 
 
 class ContextSection(BaseModel):
@@ -43,6 +58,14 @@ class Fact(BaseModel):
     source: str = Field(default="unknown", description="Source thread ID")
 
 
+class EducationSignal(BaseModel):
+    """Model for education-focused memory signals used by education UI."""
+
+    category: str = Field(..., description="Education fact category")
+    content: str = Field(..., description="Signal content")
+    confidence: float = Field(default=0.0, description="Confidence score (0-1)")
+
+
 class MemoryResponse(BaseModel):
     """Response model for memory data."""
 
@@ -51,6 +74,8 @@ class MemoryResponse(BaseModel):
     user: UserContext = Field(default_factory=UserContext)
     history: HistoryContext = Field(default_factory=HistoryContext)
     facts: list[Fact] = Field(default_factory=list)
+    education_signals: list[EducationSignal] | None = Field(default=None, description="Education-focused signals for education-course-studio")
+    used_signals: list[MemorySignalUsage] | None = Field(default=None, description="Run-level memory signals actually used in current run")
 
 
 class MemoryConfigResponse(BaseModel):
@@ -72,13 +97,18 @@ class MemoryStatusResponse(BaseModel):
     data: MemoryResponse
 
 
+def _build_education_signals(memory_data: dict[str, Any]) -> list[EducationSignal]:
+    """Build education_signals from durable education fact categories."""
+    return [EducationSignal(**item) for item in extract_education_signals(memory_data)]
+
+
 @router.get(
     "/memory",
     response_model=MemoryResponse,
     summary="Get Memory Data",
     description="Retrieve the current global memory data including user context, history, and facts.",
 )
-async def get_memory() -> MemoryResponse:
+async def get_memory(agent_name: str | None = None, run_id: str | None = None) -> MemoryResponse:
     """Get the current global memory data.
 
     Returns:
@@ -112,8 +142,19 @@ async def get_memory() -> MemoryResponse:
         }
         ```
     """
-    memory_data = get_memory_data()
-    return MemoryResponse(**memory_data)
+    memory_data = get_memory_data(agent_name)
+    response_data = dict(memory_data)
+    if agent_name == EDUCATION_AGENT_NAME:
+        education_signals = _build_education_signals(memory_data)
+        response_data["education_signals"] = education_signals
+        if run_id:
+            stored = record_used_signals(run_id, [item.model_dump() for item in education_signals], source="memory_api")
+            response_data["used_signals"] = [MemorySignalUsage(**item) for item in stored]
+        else:
+            response_data["used_signals"] = None
+    elif run_id:
+        response_data["used_signals"] = [MemorySignalUsage(**item) for item in get_used_signals(run_id)]
+    return MemoryResponse(**response_data)
 
 
 @router.post(

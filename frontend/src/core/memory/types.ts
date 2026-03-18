@@ -37,4 +37,16 @@ export interface UserMemory {
     createdAt: string;
     source: string;
   }[];
+  education_signals?: {
+    category: string;
+    content: string;
+    confidence: number;
+  }[];
+  used_signals?: {
+    category: string;
+    content: string;
+    confidence: number;
+    source: string;
+    used_at: string;
+  }[];
 }

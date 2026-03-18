@@ -1,6 +1,7 @@
 """Core behavior tests for task tool orchestration."""
 
 import importlib
+import json
 from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -130,7 +131,11 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert captured["executor_kwargs"]["config"].max_turns == 7
     assert "Skills Appendix" in captured["executor_kwargs"]["config"].system_prompt
 
-    get_available_tools.assert_called_once_with(model_name="ark-model", subagent_enabled=False)
+    get_available_tools.assert_called_once_with(
+        model_name="ark-model",
+        groups=None,
+        subagent_enabled=False,
+    )
 
     event_types = [e["type"] for e in events]
     assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
@@ -171,6 +176,94 @@ def test_task_tool_returns_failed_message(monkeypatch):
     assert events[-1]["error"] == "subagent crashed"
 
 
+def test_task_tool_inherits_parent_agent_tool_groups(monkeypatch):
+    config = _make_subagent_config()
+    runtime = _make_runtime()
+    runtime.context["agent_name"] = "education-course-studio"
+    get_available_tools = MagicMock(return_value=[])
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(
+        task_tool_module,
+        "SubagentExecutor",
+        type("DummyExecutor", (), {"__init__": lambda self, **kwargs: None, "execute_async": lambda self, prompt, task_id=None: task_id}),
+    )
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(task_tool_module, "get_skills_prompt_section", lambda: "")
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="done"),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda event: None)
+    monkeypatch.setattr(task_tool_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        task_tool_module,
+        "load_agent_config",
+        lambda name: SimpleNamespace(tool_groups=["web", "file:read", "file:write"]) if name == "education-course-studio" else None,
+    )
+    monkeypatch.setattr("src.tools.get_available_tools", get_available_tools)
+
+    output = task_tool_module.task_tool.func(
+        runtime=runtime,
+        description="执行任务",
+        prompt="complete task",
+        subagent_type="general-purpose",
+        tool_call_id="tc-tool-groups",
+    )
+
+    assert output == "Task Succeeded. Result: done"
+    get_available_tools.assert_called_once_with(
+        model_name="ark-model",
+        groups=["web", "file:read", "file:write"],
+        subagent_enabled=False,
+    )
+
+
+def test_task_tool_filters_ask_clarification_for_subagents(monkeypatch):
+    config = _make_subagent_config()
+    runtime = _make_runtime()
+    captured = {}
+
+    class DummyTool:
+        def __init__(self, name: str):
+            self.name = name
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            captured["tools"] = kwargs["tools"]
+
+        def execute_async(self, prompt, task_id=None):
+            return task_id
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(task_tool_module, "get_skills_prompt_section", lambda: "")
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(FakeSubagentStatus.COMPLETED, result="done"),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda event: None)
+    monkeypatch.setattr(task_tool_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        "src.tools.get_available_tools",
+        lambda **kwargs: [DummyTool("ask_clarification"), DummyTool("read_file")],
+    )
+
+    output = task_tool_module.task_tool.func(
+        runtime=runtime,
+        description="执行任务",
+        prompt="complete task",
+        subagent_type="general-purpose",
+        tool_call_id="tc-filter-clarification",
+    )
+
+    assert output == "Task Succeeded. Result: done"
+    assert [tool.name for tool in captured["tools"]] == ["read_file"]
+
+
 def test_task_tool_returns_timed_out_message(monkeypatch):
     config = _make_subagent_config()
     events = []
@@ -203,6 +296,105 @@ def test_task_tool_returns_timed_out_message(monkeypatch):
     assert output == "Task timed out. Error: timeout"
     assert events[-1]["type"] == "task_timed_out"
     assert events[-1]["error"] == "timeout"
+
+
+def test_education_stage_fallback_writes_research_file_on_timeout(tmp_path, monkeypatch):
+    runtime = _make_runtime()
+    runtime.context["agent_name"] = "education-course-studio"
+    runtime.context["thread_id"] = "thread-research-fallback"
+
+    class DummyPaths:
+        def sandbox_work_dir(self, thread_id: str):
+            return tmp_path / thread_id / "workspace"
+
+        def sandbox_outputs_dir(self, thread_id: str):
+            return tmp_path / thread_id / "outputs"
+
+    monkeypatch.setattr("src.config.paths.get_paths", lambda: DummyPaths())
+
+    fallback_virtual_paths = task_tool_module._write_education_stage_fallback(
+        runtime=runtime,
+        description="[Research] 场景资料",
+        reason="Execution timed out",
+    )
+
+    target = tmp_path / "thread-research-fallback" / "workspace" / "research-notes.md"
+    assert "/mnt/user-data/workspace/research-notes.md" in fallback_virtual_paths
+    assert target.exists()
+    assert "Research Notes (Fallback)" in target.read_text(encoding="utf-8")
+
+
+def test_education_stage_fallback_writes_stage2_file_for_matching_description(tmp_path, monkeypatch):
+    runtime = _make_runtime()
+    runtime.context["agent_name"] = "education-course-studio"
+
+    class DummyPaths:
+        def sandbox_work_dir(self, thread_id: str):
+            return tmp_path / thread_id / "workspace"
+
+        def sandbox_outputs_dir(self, thread_id: str):
+            return tmp_path / thread_id / "outputs"
+
+    monkeypatch.setattr("src.config.paths.get_paths", lambda: DummyPaths())
+
+    fallback_virtual_paths = task_tool_module._write_education_stage_fallback(
+        runtime=runtime,
+        description="[UbD Stage 2] 证据设计",
+        reason="Execution timed out",
+    )
+
+    assert "/mnt/user-data/workspace/stage2-assessment.md" in fallback_virtual_paths
+
+
+def test_education_stage_fallback_returns_empty_for_unmatched_description(tmp_path, monkeypatch):
+    runtime = _make_runtime()
+    runtime.context["agent_name"] = "education-course-studio"
+
+    class DummyPaths:
+        def sandbox_work_dir(self, thread_id: str):
+            return tmp_path / thread_id / "workspace"
+
+        def sandbox_outputs_dir(self, thread_id: str):
+            return tmp_path / thread_id / "outputs"
+
+    monkeypatch.setattr("src.config.paths.get_paths", lambda: DummyPaths())
+
+    fallback_virtual_paths = task_tool_module._write_education_stage_fallback(
+        runtime=runtime,
+        description="[Unknown] something",
+        reason="Execution timed out",
+    )
+
+    assert fallback_virtual_paths == []
+
+
+def test_education_stage_fallback_presentation_writes_manifest_and_learning_kit_output(tmp_path, monkeypatch):
+    runtime = _make_runtime()
+    runtime.context["agent_name"] = "education-course-studio"
+    runtime.context["thread_id"] = "thread-presentation-fallback"
+
+    class DummyPaths:
+        def sandbox_work_dir(self, thread_id: str):
+            return tmp_path / thread_id / "workspace"
+
+        def sandbox_outputs_dir(self, thread_id: str):
+            return tmp_path / thread_id / "outputs"
+
+    monkeypatch.setattr("src.config.paths.get_paths", lambda: DummyPaths())
+
+    fallback_virtual_paths = task_tool_module._write_education_stage_fallback(
+        runtime=runtime,
+        description="[Presentation] 成果整合",
+        reason="Execution timed out",
+    )
+
+    outputs_dir = tmp_path / "thread-presentation-fallback" / "outputs"
+    manifest_path = outputs_dir / "artifact-manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    paths = [entry["path"] for entry in manifest["artifacts"]]
+    assert "/mnt/user-data/outputs/learning-kit-appendix.md" in paths
+    assert "/mnt/user-data/outputs/learning-kit-appendix.md" in fallback_virtual_paths
 
 
 def test_task_tool_polling_safety_timeout(monkeypatch):

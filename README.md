@@ -345,6 +345,50 @@ Tools follow the same philosophy. DeerFlow comes with a core toolset — web sea
 └── your-custom-skill/SKILL.md      ← yours
 ```
 
+**Local custom-agent example**:
+- This workspace now includes a teacher-facing demo agent at `agents/education-course-studio/`
+- It pairs a filesystem-defined custom agent with local `skills/custom/*` contracts for UbD, PBL, approval checkpoints, and learning-kit planning
+- V1.3 quality flow is: `Presentation -> Reviewer -> Critic -> checkpoint 3`
+- Reviewer and Critic write workspace intermediates for stable checkpoint-3 summaries:
+  - `reviewer-report.md`, `reviewer-summary.json`
+  - `critic-report.md`, `critic-summary.json`
+- V1.3 keeps clarification-text compatibility and supports checkpoint metadata parsing (`checkpoint_id/recommended_option/retry_target/details`)
+- Draft review now has a guardrail: one local partial rerun is allowed; a second rejection reopens checkpoint 1 instead of endless local loops
+- Presentation outputs now include `reference-summary.md` in addition to the core course artifacts
+- The frontend route is `/workspace/agents/education-course-studio/chats/new`
+- The chat page includes an education-only memory panel showing durable categories, `education_signals`, and run-level `used_signals`
+- Memory API supports `GET /api/memory?agent_name=education-course-studio&run_id=<thread_id>` for education-scoped memory retrieval plus run-level usage signals
+- A dedicated workbench route is available at `/workspace/education`, covering project/run views, workflow template editing, template marketplace, resource library, student tasks/submissions, and audit logs
+- Education domain APIs are available under `/api/orgs/*`, `/api/education/*`, `/api/templates/*`, `/api/resources/*`, and `/api/student/*`
+- Runtime agent assets are synced to `${DEER_FLOW_HOME:-backend/.deer-flow}/agents` automatically by `scripts/sync-education-assets.sh`
+- `make dev` and `make up` run this sync + validation step before startup (fail-fast on missing agent files or required education skills)
+
+Quick try:
+
+```bash
+export OPENROUTER_API_KEY=<your-openrouter-key>
+./scripts/sync-education-assets.sh
+make dev
+# then open /workspace/agents/education-course-studio/chats/new
+# optional: open /workspace/education for project/workflow/resource/student workbench
+```
+
+Closeout validation (education V1.3):
+
+```bash
+cd backend
+OPENROUTER_API_KEY=<your-openrouter-key> PYTHONPATH=. \
+python ../scripts/education_closeout_eval.py \
+  --model step-3.5-flash \
+  --subagent-timeout 5 \
+  --report /tmp/education_closeout_report_fast.json
+```
+
+This script outputs:
+- one model-driven normal-path replay (`normal_accept`)
+- deterministic state-machine checks for CP2 rerun mapping and CP3 guardrail
+- a single JSON acceptance report under `/tmp`
+
 #### Claude Code Integration
 
 The `claude-to-deerflow` skill lets you interact with a running DeerFlow instance directly from [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Send research tasks, check status, manage threads — all without leaving the terminal.
@@ -409,6 +453,8 @@ This is the difference between a chatbot with tool access and an agent with an a
 Most agents forget everything the moment a conversation ends. DeerFlow remembers.
 
 Across sessions, DeerFlow builds a persistent memory of your profile, preferences, and accumulated knowledge. The more you use it, the better it knows you — your writing style, your technical stack, your recurring workflows. Memory is stored locally and stays under your control.
+
+Custom agents can also keep **agent-scoped memory**. The `education-course-studio` demo uses this to preserve teacher preferences, course continuity, learning-kit constraints, and reusable team templates without polluting the default global memory profile.
 
 ## Recommended Models
 

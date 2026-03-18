@@ -1,5 +1,7 @@
 """Middleware for intercepting clarification requests and presenting them to the user."""
 
+import json
+import re
 from collections.abc import Callable
 from typing import override
 
@@ -43,6 +45,55 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         """
         return any("\u4e00" <= char <= "\u9fff" for char in text)
 
+    def _normalize_options(self, raw_options: object) -> list[str]:
+        """Normalize model-produced options into a stable list of strings.
+
+        The model should pass `options` as a list, but in practice it can sometimes
+        return a JSON string (e.g. `"[\"A\",\"B\"]"`) or a plain string.
+        """
+        if raw_options is None:
+            return []
+
+        if isinstance(raw_options, (list, tuple)):
+            normalized: list[str] = []
+            for option in raw_options:
+                text = str(option).strip()
+                if text:
+                    normalized.append(text)
+            return normalized
+
+        if isinstance(raw_options, str):
+            text = raw_options.strip()
+            if not text:
+                return []
+
+            # Handle stringified JSON arrays from loose tool-calling outputs.
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return self._normalize_options(parsed)
+
+            # Handle line-delimited options, with optional numbering/bullets.
+            if "\n" in text:
+                lines = []
+                for line in text.splitlines():
+                    cleaned = re.sub(r"^\s*(\d+[\.\)]|[-*•])\s*", "", line).strip()
+                    if cleaned:
+                        lines.append(cleaned)
+                if len(lines) >= 2:
+                    return lines
+
+            # Fallback: keep a single option instead of splitting by character.
+            return [text]
+
+        if isinstance(raw_options, dict):
+            return self._normalize_options(list(raw_options.values()))
+
+        return [str(raw_options).strip()] if str(raw_options).strip() else []
+
     def _format_clarification_message(self, args: dict) -> str:
         """Format the clarification arguments into a user-friendly message.
 
@@ -55,7 +106,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         question = args.get("question", "")
         clarification_type = args.get("clarification_type", "missing_info")
         context = args.get("context")
-        options = args.get("options", [])
+        options = self._normalize_options(args.get("options", []))
 
         # Type-specific icons
         type_icons = {

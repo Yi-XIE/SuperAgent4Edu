@@ -150,6 +150,9 @@ if [ "$CMD" = "down" ]; then
     exit 0
 fi
 
+echo "Syncing education demo assets..."
+"$REPO_ROOT/scripts/sync-education-assets.sh"
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 
 echo "=========================================="

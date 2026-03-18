@@ -10,11 +10,19 @@ from src.gateway.routers import (
     agents,
     artifacts,
     channels,
+    education_audit,
+    education_checkpoints,
+    education_projects,
+    education_runs,
     mcp,
     memory,
     models,
+    orgs,
+    resources,
     skills,
+    student,
     suggestions,
+    templates,
     uploads,
 )
 
@@ -140,6 +148,26 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
                 "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
             },
             {
+                "name": "orgs",
+                "description": "Organization and membership management for education platform",
+            },
+            {
+                "name": "education",
+                "description": "Education projects, runs, checkpoints and governance APIs",
+            },
+            {
+                "name": "templates",
+                "description": "Template marketplace APIs (course/workflow/review templates)",
+            },
+            {
+                "name": "resources",
+                "description": "Education resource library APIs with whitelisting and tagging",
+            },
+            {
+                "name": "student",
+                "description": "Student assignment and submission APIs",
+            },
+            {
                 "name": "health",
                 "description": "Health check and system status endpoints",
             },
@@ -175,6 +203,20 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
+
+    # Organizations API is mounted at /api/orgs
+    app.include_router(orgs.router)
+
+    # Education project/run/checkpoint APIs
+    app.include_router(education_projects.router)
+    app.include_router(education_runs.router)
+    app.include_router(education_checkpoints.router)
+    app.include_router(education_audit.router)
+
+    # Template/resource/student domain APIs
+    app.include_router(templates.router)
+    app.include_router(resources.router)
+    app.include_router(student.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:
