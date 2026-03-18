@@ -117,6 +117,20 @@
 10. `Asset Extraction` 抽取候选素材
 11. `Lead Agent` 发起素材入库确认
 
+### 5.4 模板与策略硬约束（V1.3+）
+
+- `workflow_template_id` 不再只是存档字段，而是运行时约束输入：
+  - 可覆盖回退映射（`rerun_map`）
+  - 可开关 checkpoint（尤其 `cp4-asset-extraction-confirm`）
+  - 可设置返工护栏上限（`guard.max_local_rework`）
+- Critic 策略采用显式字段：
+  - `critic_policy=manual_on | manual_off | auto`
+  - `critic_activation_reason` 用于解释 auto 启停结果
+- 生成前素材召回会写入 run 快照：
+  - `asset_retrieval_notes`
+  - `selected_asset_ids`
+  - `retrieval_snapshot_at`
+
 ## 6. 角色说明
 
 ### 6.1 `Lead Agent`

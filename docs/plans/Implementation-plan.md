@@ -24,6 +24,37 @@
 - 当前剩余风险（模型侧）：
   - `Step 3.5 Flash` 在少数回合仍可能输出自由文本确认而非标准 checkpoint 文案，导致“纯自动正常路径”不稳定。
 
+## 全量落地状态（2026-03-18）
+
+- 已完成（代码已落地）：
+  - 运行主键统一：`run_id` 作为业务主键，`thread_id` 作为会话载体；聊天上下文已注入 `run_id`。
+  - 新增 `bootstrap` 启动环节与接口：`POST /api/education/runs/{run_id}/bootstrap`，用于首轮“先召回后确认”。
+  - `EducationRunState` 已补充 `thread_id`、`bootstrap_status`、`bootstrap_at`。
+  - 运行口径收敛到 `Lead -> Blueprint -> Package -> Reviewer -> (Critic 可选)`。
+  - `EducationRunState` 扩展：`generation_mode`、`critic_enabled`、`critic_policy`、`critic_activation_reason`、`blueprint_status`、`package_status`、`asset_extraction_status`。
+  - 新增预召回快照字段：`retrieval_snapshot_at`，并在 CP1 前写入 `asset_retrieval_notes/selected_asset_ids`。
+  - `workflow_template_id` 从“绑定字段”升级为“执行字段”：可影响回退映射、`CP4` 开关与返工护栏上限。
+  - 新增 `cp4-asset-extraction-confirm`（轻确认节点）并接入 checkpoint 状态机。
+  - 新增教育域 API：
+    - `GET/POST /api/education/assets`
+    - `GET/POST /api/education/extractions/{run_id}`
+    - `GET/POST /api/education/feedback`
+    - `GET/POST /api/education/blueprints`
+    - `GET/POST /api/education/packages`
+    - `GET /api/education/runs/{run_id}/result`
+  - 新增数据合同：`TeachingAsset`、`AssetExtractionCandidate`、`TeachingFeedback`、`CourseBlueprint`、`CoursePackage`。
+  - 运行时桥接已落地：`reviewer-summary.json` / `critic-summary.json` 会自动回填 `run.reviewer_summary` / `run.critic_summary`，并在 `critic_policy=auto` 下驱动 Critic 启停。
+  - 教师工作台新增对象化“结果区”，可直接查看蓝图/课包/工件聚合结果。
+  - 学生端提交流程升级为“选择任务/选择提交”表单流，去除手工输入 ID 依赖。
+  - Clarification middleware 增加“自由文本确认 -> 结构化 checkpoint”归一化。
+  - `Presentation` 前新增程序化硬校验，并在失败时触发受控 fallback。
+  - JSON store 增强：备份文件、快照保留、损坏恢复、日志压缩上限。
+  - 前端教育工作台新增“素材台”、素材沉淀快捷操作、反馈回流展示；聊天页已支持 `cp4`。
+  - 学生端闭环已补齐：学生提交、教师评阅，评阅结果自动回流为 `TeachingFeedback(source=student_review)`。
+
+- 当前已知风险（持续优化项）：
+  - 模型端偶发不严格遵循 checkpoint 协议，已由中间层归一化降低影响，但仍建议持续压测。
+
 ## 1. 文档目的
 
 这份文档用于把当前教育课程工作台从已有 Demo 收敛到可持续扩展的 `4+1` 运行模型，并明确：
@@ -199,9 +230,9 @@
 - 右侧结果区显示 `课程蓝图 / 教案 / PPT / 学具 / 参考资料 / 本次提取素材`
 - 返工按钮继续使用教学语言，但运行层只回退到 `Blueprint` 或 `Package`
 
-## 8. 暂不处理范围
+## 8. 历史决策（已失效）
 
-本轮不处理以下内容：
+以下条目属于早期阶段性取舍，当前版本不再作为验收口径：
 
 - 重权限体系
 - 复杂模板市场
@@ -221,11 +252,13 @@
 4. 返工目标被明确收敛为 `Blueprint` 或 `Package`
 5. 文档同步测试通过
 
-## 10. 下一步实现优先级
+## 10. 封板后观察项（非闭环阻断）
 
-在文档层收敛完成后，建议按以下优先级推进代码：
+以下条目已在当前版本落地，不再作为“待实现优先级”：
 
-1. 先把运行态和前端术语同步到 `Blueprint / Package`
-2. 再把 `Reviewer` / `Critic` 结构化结果真正写回运行态
-3. 再把素材台接进生成前召回与生成后提取链路
-4. 最后再评估模板库、资源库和校本协作的整合深度
+1. 运行态与前端术语同步到 `Blueprint / Package`
+2. `Reviewer` / `Critic` 结构化结果写回运行态
+3. 素材台接入生成前召回与生成后提取链路
+4. 模板库、资源库与校本协作骨架联动
+
+后续仅保留体验增强和治理细化，不影响当前文档闭环验收。

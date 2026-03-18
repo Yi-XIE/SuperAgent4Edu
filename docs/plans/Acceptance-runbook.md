@@ -38,6 +38,11 @@ uv run pytest -p no:capture tests/test_education_agent_assets.py \
   tests/test_education_memory_router.py \
   tests/test_education_frontend_contracts.py \
   tests/test_education_clarification_contract.py \
+  tests/test_education_workflow_template_contract.py \
+  tests/test_education_pre_retrieval_snapshot.py \
+  tests/test_education_critic_auto_policy.py \
+  tests/test_education_student_feedback_loop.py \
+  tests/test_education_assets_extractions_feedback.py \
   tests/test_education_hitl_memory_middleware.py \
   tests/test_task_tool_core_logic.py
 ```
@@ -58,7 +63,18 @@ pnpm exec tsc --noEmit --incremental false
 
 - 无 TypeScript 类型错误
 
-### 3.3 收尾脚本（推荐）
+### 3.3 CI 快速验收（状态机 + 合同）
+
+```bash
+cd ../backend
+./../scripts/education_ci_quickcheck.sh
+```
+
+通过标准：
+
+- 状态机、模板驱动、预召回、学生评阅回流、docs-sync 合同均通过
+
+### 3.4 收尾脚本（推荐）
 
 用于快速收集“模型实测 + 分支状态机验收”统一报告：
 
@@ -84,7 +100,7 @@ python ../scripts/education_closeout_eval.py \
 步骤：
 
 1. 启动系统：`make dev`
-2. 打开 `/workspace/agents/education-course-studio/chats/new`
+2. 打开 `/workspace/education`，创建 run 后点击“进入关联聊天”
 3. 输入不完整任务（缺课时或学具限制）
 
 期望：
@@ -97,24 +113,24 @@ python ../scripts/education_closeout_eval.py \
 步骤：
 
 1. 在审批点 1 选择“继续并锁定当前任务约束”
-2. 等待 Stage1 + Research 完成并进入审批点 2
+2. 等待 `Blueprint` 完成并进入审批点 2
 3. 选择“调整研究重点”
 
 期望：
 
 - 不全量重跑
-- 仅触发 `Research -> Learning-Kit -> Presentation -> Reviewer -> Critic` 相关阶段回退
+- 仅触发 `Blueprint -> Package -> Reviewer -> Critic(按 critic_policy)` 相关阶段回退
 
 ### 用例 3：审批点 3 学具局部返工
 
 步骤：
 
-1. 让流程完成 `Presentation -> Reviewer -> Critic` 并进入审批点 3
+1. 让流程完成 `Package -> Reviewer -> Critic(按 critic_policy)` 并进入审批点 3
 2. 首次选择“重做学具附录”
 
 期望：
 
-- 仅重跑 `Learning-Kit + Presentation + Reviewer + Critic`
+- 仅重跑 `Package + Reviewer + Critic(按 critic_policy)`
 - 不重跑前序 UbD 阶段
 
 ### 用例 4：审批点 3 返工护栏
@@ -157,6 +173,86 @@ python ../scripts/education_closeout_eval.py \
 - 右侧可见“教师记忆区”
 - 可见“本次使用信号”列表（`education_signals`）
 - 面板异常时主对话不受影响（面板可降级隐藏）
+
+### 用例 7：Checkpoint 4 素材提取确认
+
+步骤：
+
+1. 在草案评审点选择“接受”
+2. 等待进入 `素材提取确认` 卡片
+3. 分别测试：
+   - `一键入库`
+   - `跳过本轮`
+
+期望：
+
+- 出现 `cp4-asset-extraction-confirm` 结构化卡片
+- 一键入库后 run 状态为 `accepted` 且素材台条目增加
+- 跳过本轮后 run 状态为 `accepted` 且本轮候选标记为 `skipped`
+
+### 用例 8：Critic 条件启用
+
+步骤：
+
+1. 创建 run 时设置 `critic_policy=manual_off`，完成一次 CP3 返工
+2. 再创建 run 设置 `critic_policy=auto`，并在约束里加入“严格复核/安全限制”
+
+期望：
+
+- `critic_policy=manual_off` 时，回退链路不包含 `Critic`
+- `critic_policy=auto` 且命中高风险/边界条件时，`critic_enabled=true` 且回退链路包含 `Critic`
+
+### 用例 9：素材召回对下一轮可见
+
+步骤：
+
+1. 完成一次 `一键入库` 的素材沉淀
+2. 新建第二次会话/运行
+
+期望：
+
+- `run.asset_retrieval_notes` 有内容
+- `run.retrieval_snapshot_at` 非空
+- 素材台中被复用素材在本轮可见（标题/标签/复用计数可查询）
+
+### 用例 10：workflow_template_id 驱动执行
+
+步骤：
+
+1. 创建 workflow 模板并绑定到 run（设置 `workflow_template_id`）
+2. 配置模板中的 `rerun_map/checkpoints/guard`
+3. 触发 CP3 局部返工与 CP3 接受路径
+
+期望：
+
+- 回退链路按模板 `rerun_map` 生效
+- 关闭 `cp4-asset-extraction-confirm` 时，CP3 选择“接受”可直接完成 run
+
+### 用例 11：学生提交与教师评阅回流
+
+步骤：
+
+1. 在“学生端”发布任务并写入一次学生提交
+2. 对该提交执行教师评阅
+
+期望：
+
+- 提交进入 `student_submissions`
+- 评阅后自动生成 `TeachingFeedback(source=student_review)`，并写入 `submission_id`
+- 提交与评阅均可通过下拉选择完成，不需要手工输入 task/submission ID
+
+### 用例 12：对象化结果区聚合展示
+
+步骤：
+
+1. 进入 `/workspace/education` 的“教师工作台”
+2. 找到“课程结果区（对象化视图）”
+3. 观察每个 run 的蓝图、课包摘要和工件列表
+
+期望：
+
+- 页面可展示 `CourseBlueprint` / `CoursePackage` 聚合结果
+- 至少可见工件清单、召回依据摘要和已沉淀素材数量
 
 ## 5. 常见失败排查
 
