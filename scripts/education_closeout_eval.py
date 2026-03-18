@@ -46,10 +46,14 @@ def parse_checkpoint(text: str | None) -> str | None:
         return None
     if "任务确认点" in text:
         return "cp1"
+    if "课程蓝图锁定点" in text:
+        return "cp2"
     if "课程目标锁定点" in text:
         return "cp2"
     if "草案评审点" in text:
         return "cp3"
+    if "素材提取确认" in text:
+        return "cp4"
     return None
 
 
@@ -107,7 +111,7 @@ def run_turn(
                 subagent_enabled=True,
                 plan_mode=False,
                 max_concurrent_subagents=max_concurrent_subagents,
-                recursion_limit=120,
+                recursion_limit=240,
             ):
                 if event.type != "messages-tuple":
                     continue
@@ -206,6 +210,8 @@ def assert_expected_files(thread_id: str) -> dict[str, Any]:
         "learning-kit-appendix.md",
         "reviewer-report.md",
         "reviewer-summary.json",
+    ]
+    optional_workspace_files = [
         "critic-report.md",
         "critic-summary.json",
     ]
@@ -215,6 +221,9 @@ def assert_expected_files(thread_id: str) -> dict[str, Any]:
         "outputs_exists": {name: (outputs / name).exists() for name in output_files},
         "workspace_exists": {
             name: (workspace / name).exists() for name in workspace_files
+        },
+        "workspace_optional_exists": {
+            name: (workspace / name).exists() for name in optional_workspace_files
         },
     }
 
@@ -352,6 +361,10 @@ def scenario_normal_accept(client: DeerFlowClient, model_name: str) -> ScenarioR
             message = pick_accept_option(clar_text)
             stale_turns = 0
             continue
+        if checkpoint == "cp4":
+            message = "一键入库"
+            stale_turns = 0
+            continue
 
         interim = assert_expected_files(thread_id)
         if all(interim["outputs_exists"].values()) and all(
@@ -417,8 +430,9 @@ def scenario_cp2_adjust_research_state_machine() -> ScenarioResult:
         actor_user_id="tester",
     )
     result = apply_checkpoint_decision(run, decision)
-    expected_chain = ["Research", "Learning-Kit", "Presentation", "Reviewer", "Critic"]
-    ok = result.rerun_targets == expected_chain
+    expected_without_critic = ["Blueprint", "Package", "Reviewer"]
+    expected_with_critic = ["Blueprint", "Package", "Reviewer", "Critic"]
+    ok = result.rerun_targets in (expected_without_critic, expected_with_critic)
     return ScenarioResult(
         name="cp2_adjust_research_state_machine",
         thread_id=run.id,
@@ -430,7 +444,10 @@ def scenario_cp2_adjust_research_state_machine() -> ScenarioResult:
                 "rerun_targets": result.rerun_targets,
             }
         ],
-        checks={"expected_chain": expected_chain, "actual_chain": result.rerun_targets},
+        checks={
+            "expected_chain": [expected_without_critic, expected_with_critic],
+            "actual_chain": result.rerun_targets,
+        },
     )
 
 

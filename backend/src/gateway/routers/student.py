@@ -10,7 +10,9 @@ from src.education.rbac import require_permission_dep
 from src.education.schemas import (
     ActorContext,
     CreateStudentTaskRequest,
+    EducationRunState,
     ReviewSubmissionRequest,
+    TeachingFeedback,
     StudentSubmission,
     StudentTask,
     SubmitStudentTaskRequest,
@@ -31,6 +33,31 @@ def _now() -> str:
 def _guard_org(actor: ActorContext, org_id: str) -> None:
     if actor.role != "platform_admin" and actor.org_id != org_id:
         raise HTTPException(status_code=403, detail="Cross-org access denied")
+
+
+def _create_review_feedback(
+    *,
+    store,
+    actor: ActorContext,
+    task: StudentTask,
+    submission_id: str,
+    teacher_feedback: str,
+    score: float | None,
+) -> TeachingFeedback:
+    return TeachingFeedback(
+        id=store.generate_id("feedback"),
+        org_id=task.org_id,
+        run_id=task.run_id,
+        user_id=actor.user_id,
+        used_sections=["student_submission_review"],
+        changed_sections=["评分"] if score is not None else [],
+        ineffective_sections=[],
+        asset_ids=[],
+        summary=teacher_feedback or f"学生任务评阅：{task.title}",
+        rating=score,
+        source="student_review",
+        submission_id=submission_id,
+    )
 
 
 @router.get("/tasks", response_model=list[StudentTask], summary="List student tasks")
@@ -68,8 +95,15 @@ async def create_student_task(
     )
 
     def _mutate(state: dict):
-        if payload.run_id not in state["runs"]:
+        run_raw = state["runs"].get(payload.run_id)
+        if not isinstance(run_raw, dict):
             raise HTTPException(status_code=404, detail="Run not found")
+        run = EducationRunState(**run_raw)
+        if run.status != "accepted":
+            raise HTTPException(
+                status_code=400,
+                detail="Run must be accepted before publishing student tasks",
+            )
         state["student_tasks"][task.id] = task.model_dump()
         return state["student_tasks"][task.id]
 
@@ -150,10 +184,32 @@ async def review_submission(
             raise HTTPException(status_code=404, detail="Submission not found")
         submission = StudentSubmission(**raw)
         _guard_org(actor, submission.org_id)
+        task_raw = state["student_tasks"].get(submission.task_id)
+        if not isinstance(task_raw, dict):
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = StudentTask(**task_raw)
+        _guard_org(actor, task.org_id)
+
         submission.score = payload.score
         submission.teacher_feedback = payload.teacher_feedback
         submission.reviewed_at = _now()
         state["student_submissions"][submission_id] = submission.model_dump()
+        feedback = _create_review_feedback(
+            store=store,
+            actor=actor,
+            task=task,
+            submission_id=submission_id,
+            teacher_feedback=payload.teacher_feedback,
+            score=payload.score,
+        )
+        state["feedback"][feedback.id] = feedback.model_dump()
+
+        run_raw = state["runs"].get(task.run_id)
+        if isinstance(run_raw, dict):
+            run = EducationRunState(**run_raw)
+            run.details = feedback.summary
+            run.updated_at = _now()
+            state["runs"][run.id] = run.model_dump()
         return state["student_submissions"][submission_id]
 
     updated = store.transaction(_mutate)
@@ -163,5 +219,6 @@ async def review_submission(
         action="student.submission.review",
         entity_type="student_submission",
         entity_id=submission_id,
+        details={"feedback_source": "student_review"},
     )
     return StudentSubmission(**updated)

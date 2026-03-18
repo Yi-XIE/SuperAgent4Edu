@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import replace
@@ -18,6 +19,372 @@ from src.subagents import SubagentExecutor, get_subagent_config
 from src.subagents.executor import SubagentStatus, cleanup_background_task, get_background_task_result
 
 logger = logging.getLogger(__name__)
+
+_EDU_STAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "Blueprint": ("blueprint", "stage 1", "预期结果", "课程蓝图"),
+    "Package": ("package", "stage 2", "stage 3", "证据设计", "活动流程", "成果整合", "学具附录"),
+    "Reviewer": ("reviewer", "质量评审"),
+    "Critic": ("critic", "挑战性复核"),
+}
+
+
+def _detect_education_stage(description: str) -> str | None:
+    lowered = description.lower()
+    for stage, markers in _EDU_STAGE_ALIASES.items():
+        if any(marker in lowered or marker in description for marker in markers):
+            return stage
+    return None
+
+
+def _resolve_education_run_key(state: dict, *, run_id: str | None, thread_id: str | None) -> str | None:
+    runs = state.get("runs", {})
+    if not isinstance(runs, dict):
+        return None
+    if isinstance(run_id, str) and run_id in runs and isinstance(runs[run_id], dict):
+        return run_id
+    if isinstance(thread_id, str):
+        if thread_id in runs and isinstance(runs[thread_id], dict):
+            return thread_id
+        for key, raw in runs.items():
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("thread_id") == thread_id:
+                return key
+    return None
+
+
+def _load_education_run_context(
+    runtime: ToolRuntime[ContextT, ThreadState] | None,
+) -> tuple[dict, object, str] | None:
+    if runtime is None:
+        return None
+    agent_name = runtime.context.get("agent_name")
+    run_id = runtime.context.get("run_id")
+    thread_id = runtime.context.get("thread_id")
+    if agent_name != "education-course-studio":
+        return None
+
+    from src.education.schemas import EducationRunState
+    from src.education.store import get_education_store
+
+    store = get_education_store()
+    state = store.read_state()
+    run_key = _resolve_education_run_key(
+        state,
+        run_id=run_id if isinstance(run_id, str) else None,
+        thread_id=thread_id if isinstance(thread_id, str) else None,
+    )
+    if run_key is None:
+        return None
+    raw = state.get("runs", {}).get(run_key)
+    if not isinstance(raw, dict):
+        return None
+    run = EducationRunState(**raw)
+    return state, run, run_key
+
+
+def _should_skip_education_subtask(
+    runtime: ToolRuntime[ContextT, ThreadState] | None,
+    description: str,
+) -> str | None:
+    stage = _detect_education_stage(description)
+    if stage is None:
+        return None
+
+    loaded = _load_education_run_context(runtime)
+    if loaded is None:
+        return None
+    state, run, _thread_id = loaded
+
+    from src.education.workflow_template import enabled_rerun_stages, get_workflow_template_content
+
+    template_content = get_workflow_template_content(state, run)
+    enabled_stages = enabled_rerun_stages(template_content)
+    if enabled_stages and stage in {"Blueprint", "Package", "Reviewer", "Critic"} and stage not in enabled_stages:
+        return f"workflow template disabled stage `{stage}`"
+
+    if stage == "Critic":
+        if run.critic_policy == "manual_off":
+            return "critic_policy=manual_off"
+        if run.critic_policy == "auto" and not run.critic_enabled:
+            return "critic_policy=auto 且未命中自动启用条件"
+    return None
+
+
+def _extract_markdown_key_lines(path, *, limit: int = 3) -> list[str]:
+    if not path.exists():
+        return []
+    content = path.read_text(encoding="utf-8")
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    picked: list[str] = []
+    for line in lines:
+        normalized = re.sub(r"^[-*]\s+|^\d+\.\s+", "", line).strip()
+        if not normalized:
+            continue
+        if normalized.startswith("#"):
+            continue
+        if len(normalized) < 4:
+            continue
+        picked.append(normalized)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _extract_artifact_paths_from_manifest(path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+    paths: list[str] = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        item_path = item.get("path")
+        if isinstance(item_path, str) and item_path.startswith("/mnt/user-data/"):
+            paths.append(item_path)
+    return paths
+
+
+def _sync_education_runtime_state(
+    runtime: ToolRuntime[ContextT, ThreadState] | None,
+    description: str,
+) -> list[str]:
+    if runtime is None:
+        return []
+    agent_name = runtime.context.get("agent_name")
+    run_id = runtime.context.get("run_id")
+    thread_id = runtime.context.get("thread_id")
+    if agent_name != "education-course-studio" or not isinstance(thread_id, str):
+        return []
+
+    from src.config.paths import get_paths
+    from src.education.critic_policy import evaluate_critic_activation
+    from src.education.schemas import (
+        CourseBlueprint,
+        CoursePackage,
+        CriticSummaryV2,
+        EducationRunState,
+        ReviewerSummaryV2,
+        utc_now_iso,
+    )
+    from src.education.store import get_education_store
+
+    store = get_education_store()
+    paths = get_paths()
+    workspace_dir = paths.sandbox_work_dir(thread_id)
+    outputs_dir = paths.sandbox_outputs_dir(thread_id)
+    stage = _detect_education_stage(description)
+    messages: list[str] = []
+
+    def _mutate(state: dict):
+        run_key = _resolve_education_run_key(
+            state,
+            run_id=run_id if isinstance(run_id, str) else None,
+            thread_id=thread_id,
+        )
+        if run_key is None:
+            return None
+        raw = state.get("runs", {}).get(run_key)
+        if not isinstance(raw, dict):
+            return None
+        run = EducationRunState(**raw)
+        changed = False
+
+        reviewer_path = workspace_dir / "reviewer-summary.json"
+        if reviewer_path.exists() and stage in {"Reviewer", "Critic", "Package"}:
+            try:
+                reviewer_summary = ReviewerSummaryV2.model_validate_json(
+                    reviewer_path.read_text(encoding="utf-8"),
+                )
+                run.reviewer_summary = reviewer_summary
+                changed = True
+                if run.critic_policy == "auto":
+                    critic_enabled, reason = evaluate_critic_activation(run, reviewer_summary)
+                    run.critic_enabled = critic_enabled
+                    run.critic_activation_reason = reason
+                    changed = True
+            except Exception:
+                logger.exception("Failed to parse reviewer-summary.json for run sync")
+
+        critic_path = workspace_dir / "critic-summary.json"
+        if critic_path.exists() and stage == "Critic":
+            try:
+                run.critic_summary = CriticSummaryV2.model_validate_json(
+                    critic_path.read_text(encoding="utf-8"),
+                )
+                changed = True
+            except Exception:
+                logger.exception("Failed to parse critic-summary.json for run sync")
+
+        blueprint_id = None
+        blueprint_row = None
+        for item_id, row in state.get("course_blueprints", {}).items():
+            if isinstance(row, dict) and row.get("run_id") == run.id and row.get("org_id") == run.org_id:
+                blueprint_id = item_id
+                blueprint_row = row
+                break
+        stage1_path = workspace_dir / "stage1-ubd.md"
+        research_path = workspace_dir / "research-notes.md"
+        if (stage in {"Blueprint", "Package", "Reviewer", "Critic"}) and (stage1_path.exists() or research_path.exists()):
+            if blueprint_row is not None:
+                blueprint = CourseBlueprint(**blueprint_row)
+            else:
+                blueprint = CourseBlueprint(
+                    id=store.generate_id("blueprint"),
+                    org_id=run.org_id,
+                    run_id=run.id,
+                    title=run.title,
+                )
+            key_lines = _extract_markdown_key_lines(stage1_path, limit=8)
+            questions = [line for line in key_lines if "?" in line or "？" in line]
+            blueprint.big_ideas = key_lines[:3]
+            blueprint.essential_questions = questions[:3]
+            blueprint.transfer_goals = [line for line in key_lines if line not in questions][:3]
+            if not blueprint.transfer_goals:
+                blueprint.transfer_goals = key_lines[:3]
+            blueprint.project_direction = run.title
+            if research_path.exists():
+                research_lines = _extract_markdown_key_lines(research_path, limit=6)
+                blueprint.research_summary = "；".join(research_lines[:3])[:320]
+            blueprint.updated_at = utc_now_iso()
+            state["course_blueprints"][blueprint.id] = blueprint.model_dump()
+            blueprint_id = blueprint.id
+            changed = True
+
+        package_id = None
+        package_row = None
+        for item_id, row in state.get("course_packages", {}).items():
+            if isinstance(row, dict) and row.get("run_id") == run.id and row.get("org_id") == run.org_id:
+                package_id = item_id
+                package_row = row
+                break
+        lesson_path = outputs_dir / "lesson-plan.md"
+        manifest_path = outputs_dir / "artifact-manifest.json"
+        if (stage in {"Package", "Reviewer", "Critic"}) and lesson_path.exists():
+            if package_row is not None:
+                package = CoursePackage(**package_row)
+            else:
+                package = CoursePackage(
+                    id=store.generate_id("package"),
+                    org_id=run.org_id,
+                    run_id=run.id,
+                    blueprint_id=blueprint_id,
+                )
+            package.blueprint_id = blueprint_id
+            lesson_lines = _extract_markdown_key_lines(lesson_path, limit=5)
+            package.summary = "；".join(lesson_lines[:3])[:320]
+            package.updated_at = utc_now_iso()
+            state["course_packages"][package.id] = package.model_dump()
+            package_id = package.id
+            changed = True
+
+        if stage in {"Package", "Reviewer", "Critic"} and manifest_path.exists():
+            manifest_paths = _extract_artifact_paths_from_manifest(manifest_path)
+            if manifest_paths:
+                run.artifact_paths = manifest_paths
+                changed = True
+
+        if changed:
+            run.updated_at = utc_now_iso()
+            state["runs"][run_key] = run.model_dump()
+            return {
+                "reviewer_synced": reviewer_path.exists(),
+                "critic_synced": critic_path.exists() and stage == "Critic",
+                "blueprint_id": blueprint_id,
+                "package_id": package_id,
+            }
+        return None
+
+    changed_info = store.transaction(_mutate)
+    if not isinstance(changed_info, dict):
+        return messages
+    if changed_info.get("reviewer_synced"):
+        messages.append("reviewer summary synced to run state")
+    if changed_info.get("critic_synced"):
+        messages.append("critic summary synced to run state")
+    if changed_info.get("blueprint_id"):
+        messages.append("blueprint object upserted")
+    if changed_info.get("package_id"):
+        messages.append("package object upserted")
+    return messages
+
+
+def _run_presentation_hard_validator(workspace_dir, outputs_dir) -> tuple[bool, list[str]]:
+    """Validate non-negotiable constraints before reviewer stage."""
+    issues: list[str] = []
+    brief_path = workspace_dir / "course-brief.json"
+    lesson_path = outputs_dir / "lesson-plan.md"
+    kit_path = outputs_dir / "learning-kit-appendix.md"
+
+    if not brief_path.exists() or not lesson_path.exists() or not kit_path.exists():
+        return True, []
+
+    try:
+        brief = json.loads(brief_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False, ["course-brief.json 不是有效 JSON，无法执行硬校验。"]
+
+    lesson = lesson_path.read_text(encoding="utf-8")
+    kit = kit_path.read_text(encoding="utf-8")
+
+    session_count = int(brief.get("session_count", 0) or 0)
+    session_minutes = int(brief.get("session_length_minutes", 0) or 0)
+    learning_kit = brief.get("learning_kit", {})
+    constraints = learning_kit.get("constraints", []) if isinstance(learning_kit, dict) else []
+    constraint_text = "\n".join(str(item) for item in constraints)
+
+    if session_count > 0:
+        markers = re.findall(r"(?:第\s*(\d+)\s*课时|Session\s*(\d+)|课时\s*(\d+))", lesson, flags=re.IGNORECASE)
+        unique_ids = {next((value for value in group if value), "") for group in markers if any(group)}
+        if unique_ids and len(unique_ids) < session_count:
+            issues.append(f"教案仅识别到 {len(unique_ids)} 个课时标记，低于 brief 约束 {session_count}。")
+
+    if session_minutes > 0:
+        durations = [int(value) for value in re.findall(r"(\d+)\s*分钟", lesson)]
+        if durations and any(value != session_minutes for value in durations):
+            issues.append(f"教案出现与约束不一致的课时分钟数，目标为 {session_minutes} 分钟。")
+
+    budget_cap = None
+    budget_match = re.search(r"预算[^\d]*(\d+(?:\.\d+)?)\s*元", constraint_text)
+    if budget_match:
+        budget_cap = float(budget_match.group(1))
+    if budget_cap is not None:
+        costs = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)\s*元", kit)]
+        if costs and sum(costs) > budget_cap:
+            issues.append(f"学具总预算估算 {sum(costs):.1f} 元，超过约束上限 {budget_cap:.1f} 元。")
+
+    lower_constraints = constraint_text.lower()
+    lower_kit = kit.lower()
+    sharp_banned = any(token in lower_constraints for token in ["不允许尖锐", "禁止尖锐", "no sharp", "sharp tool"])
+    heat_banned = any(token in lower_constraints for token in ["禁止高温", "不允许高温", "no heat", "high heat"])
+
+    if sharp_banned and any(token in lower_kit for token in ["尖锐", "美工刀", "刻刀", "刀片", "锋利"]):
+        issues.append("学具方案包含尖锐工具，但 brief 明确禁用。")
+    if heat_banned and any(token in lower_kit for token in ["高温", "热熔", "加热", "焊接", "明火"]):
+        issues.append("学具方案包含高温/加热行为，但 brief 明确禁用。")
+
+    report = {
+        "ok": len(issues) == 0,
+        "issues": issues,
+        "checked_files": [
+            "/mnt/user-data/workspace/course-brief.json",
+            "/mnt/user-data/outputs/lesson-plan.md",
+            "/mnt/user-data/outputs/learning-kit-appendix.md",
+        ],
+    }
+    (workspace_dir / "presentation-hard-check.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return len(issues) == 0, issues
 
 
 def _write_education_stage_fallback(
@@ -59,7 +426,7 @@ def _write_education_stage_fallback(
             target.write_text(content, encoding="utf-8")
             written.append(f"/mnt/user-data/outputs/{name}")
 
-        if "stage 1" in lowered or "预期结果" in description:
+        if "stage 1" in lowered or "预期结果" in description or "blueprint" in lowered or "蓝图" in description:
             write_workspace_file(
                 "stage1-ubd.md",
                 f"""# Stage 1 UbD (Fallback)
@@ -111,7 +478,7 @@ def _write_education_stage_fallback(
 """,
             )
 
-        if "stage 2" in lowered or "证据设计" in description:
+        if "stage 2" in lowered or "证据设计" in description or "package" in lowered:
             write_workspace_file(
                 "stage2-assessment.md",
                 f"""# Stage 2 Assessment (Fallback)
@@ -123,7 +490,7 @@ def _write_education_stage_fallback(
 """,
             )
 
-        if "stage 3" in lowered or "pbl 活动" in description:
+        if "stage 3" in lowered or "pbl 活动" in description or "package" in lowered:
             write_workspace_file(
                 "stage3-pbl-plan.md",
                 f"""# Stage 3 PBL Plan (Fallback)
@@ -135,7 +502,7 @@ def _write_education_stage_fallback(
 """,
             )
 
-        if "learning kit" in lowered or "学具附录" in description:
+        if "learning kit" in lowered or "学具附录" in description or "package" in lowered:
             write_workspace_file(
                 "learning-kit-appendix.md",
                 f"""# Learning Kit Appendix (Fallback)
@@ -147,7 +514,7 @@ def _write_education_stage_fallback(
 """,
             )
 
-        if "presentation" in lowered or "成果整合" in description:
+        if "presentation" in lowered or "成果整合" in description or "package" in lowered:
             kit_fallback = """# Learning Kit Appendix (Fallback)
 
 - Low-cost printable trait cards and label cards.
@@ -258,7 +625,7 @@ def _write_education_stage_fallback(
                         "note": "Baseline alignment kept",
                     }
                 ],
-                "suggested_rerun_agents": ["Presentation"],
+                "suggested_rerun_agents": ["Package"],
                 "lead_note": "Recommend focused refinement before final acceptance.",
             }
             write_workspace_file("reviewer-summary.json", json.dumps(reviewer_summary, ensure_ascii=False, indent=2))
@@ -278,7 +645,7 @@ def _write_education_stage_fallback(
                 "agreement_with_reviewer": "partial",
                 "new_key_risks": ["Fallback simplification may reduce classroom specificity"],
                 "escalate_rerun": False,
-                "suggested_rerun_agents": ["Presentation"],
+                "suggested_rerun_agents": ["Package"],
                 "lead_note": "If teacher rejects draft, rerun presentation with explicit constraints.",
             }
             write_workspace_file("critic-summary.json", json.dumps(critic_summary, ensure_ascii=False, indent=2))
@@ -312,7 +679,7 @@ def _ensure_education_stage_contracts(
         outputs_dir = paths.sandbox_outputs_dir(thread_id)
 
         missing = False
-        if "presentation" in lowered or "成果整合" in description:
+        if "presentation" in lowered or "成果整合" in description or "package" in lowered:
             required = [
                 outputs_dir / "ubd-course-card.md",
                 outputs_dir / "lesson-plan.md",
@@ -322,6 +689,11 @@ def _ensure_education_stage_contracts(
                 outputs_dir / "artifact-manifest.json",
             ]
             missing = any(not item.exists() for item in required)
+            if not missing:
+                ok, issues = _run_presentation_hard_validator(workspace_dir, outputs_dir)
+                if not ok:
+                    reason_text = "; ".join(issues)
+                    return _write_education_stage_fallback(runtime, description, f"presentation hard check failed: {reason_text}")
         elif "reviewer" in lowered or "质量评审" in description:
             required = [
                 workspace_dir / "reviewer-report.md",
@@ -403,6 +775,10 @@ def task_tool(
     config = get_subagent_config(subagent_type)
     if config is None:
         return f"Error: Unknown subagent type '{subagent_type}'. Available: general-purpose, bash"
+
+    skip_reason = _should_skip_education_subtask(runtime, description)
+    if skip_reason:
+        return f"Task Skipped. Reason: {skip_reason}"
 
     # Build config overrides
     overrides: dict = {}
@@ -515,24 +891,48 @@ def task_tool(
             logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
             cleanup_background_task(task_id)
             fallback_paths = _ensure_education_stage_contracts(runtime, description, "missing required contract files after subtask completion")
+            sync_notes = _sync_education_runtime_state(runtime, description)
             if fallback_paths:
+                if sync_notes:
+                    return (
+                        f"Task Succeeded. Result: {result.result}. Contract fallback outputs written: {', '.join(fallback_paths)}. "
+                        f"Runtime sync: {', '.join(sync_notes)}."
+                    )
                 return f"Task Succeeded. Result: {result.result}. Contract fallback outputs written: {', '.join(fallback_paths)}"
+            if sync_notes:
+                return f"Task Succeeded. Result: {result.result}. Runtime sync: {', '.join(sync_notes)}."
             return f"Task Succeeded. Result: {result.result}"
         elif result.status == SubagentStatus.FAILED:
             writer({"type": "task_failed", "task_id": task_id, "error": result.error})
             logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
             cleanup_background_task(task_id)
             fallback_paths = _write_education_stage_fallback(runtime, description, result.error or "")
+            sync_notes = _sync_education_runtime_state(runtime, description)
             if fallback_paths:
+                if sync_notes:
+                    return (
+                        f"Task failed. Error: {result.error}. Fallback outputs written: {', '.join(fallback_paths)}. "
+                        f"Runtime sync: {', '.join(sync_notes)}."
+                    )
                 return f"Task failed. Error: {result.error}. Fallback outputs written: {', '.join(fallback_paths)}"
+            if sync_notes:
+                return f"Task failed. Error: {result.error}. Runtime sync: {', '.join(sync_notes)}."
             return f"Task failed. Error: {result.error}"
         elif result.status == SubagentStatus.TIMED_OUT:
             writer({"type": "task_timed_out", "task_id": task_id, "error": result.error})
             logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
             cleanup_background_task(task_id)
             fallback_paths = _write_education_stage_fallback(runtime, description, result.error or "")
+            sync_notes = _sync_education_runtime_state(runtime, description)
             if fallback_paths:
+                if sync_notes:
+                    return (
+                        f"Task timed out. Error: {result.error}. Fallback outputs written: {', '.join(fallback_paths)}. "
+                        f"Runtime sync: {', '.join(sync_notes)}."
+                    )
                 return f"Task timed out. Error: {result.error}. Fallback outputs written: {', '.join(fallback_paths)}"
+            if sync_notes:
+                return f"Task timed out. Error: {result.error}. Runtime sync: {', '.join(sync_notes)}."
             return f"Task timed out. Error: {result.error}"
 
         # Still running, wait before next poll

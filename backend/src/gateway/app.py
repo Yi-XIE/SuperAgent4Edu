@@ -10,8 +10,13 @@ from src.gateway.routers import (
     agents,
     artifacts,
     channels,
+    education_assets,
     education_audit,
+    education_blueprints,
     education_checkpoints,
+    education_extractions,
+    education_feedback,
+    education_packages,
     education_projects,
     education_runs,
     mcp,
@@ -212,6 +217,11 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     app.include_router(education_runs.router)
     app.include_router(education_checkpoints.router)
     app.include_router(education_audit.router)
+    app.include_router(education_blueprints.router)
+    app.include_router(education_packages.router)
+    app.include_router(education_assets.router)
+    app.include_router(education_extractions.router)
+    app.include_router(education_feedback.router)
 
     # Template/resource/student domain APIs
     app.include_router(templates.router)

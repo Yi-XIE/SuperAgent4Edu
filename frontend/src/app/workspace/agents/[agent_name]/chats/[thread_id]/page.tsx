@@ -1,8 +1,8 @@
 "use client";
 
 import { BotIcon, PlusSquare } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useMemo } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
@@ -18,8 +18,10 @@ import { TodoList } from "@/components/workspace/todo-list";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
 import {
+  bootstrapRun,
   decideCheckpoint,
   isEducationAgent,
+  updateRun as updateEducationRun,
   type EducationCheckpoint,
 } from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
@@ -34,6 +36,7 @@ export default function AgentChatPage() {
   const { t } = useI18n();
   const [settings, setSettings] = useLocalSettings();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const { agent_name } = useParams<{
     agent_name: string;
@@ -43,6 +46,12 @@ export default function AgentChatPage() {
   const isEducationStudio = isEducationAgent(agent_name);
 
   const { threadId, isNewThread, setIsNewThread } = useThreadChat();
+  const runIdFromQuery = searchParams.get("run_id");
+  const educationRunId = isEducationStudio
+    ? (runIdFromQuery ?? threadId)
+    : undefined;
+  const bootstrappedRunRef = useRef<string | null>(null);
+  const bootstrapPromiseRef = useRef<Promise<void> | null>(null);
   const effectiveContext = useMemo(
     () =>
       isEducationStudio
@@ -56,18 +65,82 @@ export default function AgentChatPage() {
     [isEducationStudio, settings.context],
   );
 
+  useEffect(() => {
+    if (!isEducationStudio || !educationRunId) {
+      return;
+    }
+    if (bootstrappedRunRef.current === educationRunId) {
+      return;
+    }
+    const promise = bootstrapRun(educationRunId)
+      .then(() => {
+        bootstrappedRunRef.current = educationRunId;
+      })
+      .catch(() => {
+        // Best-effort bootstrap; chat flow should remain available.
+      })
+      .finally(() => {
+        if (bootstrapPromiseRef.current === promise) {
+          bootstrapPromiseRef.current = null;
+        }
+      });
+    bootstrapPromiseRef.current = promise;
+  }, [educationRunId, isEducationStudio]);
+
+  const ensureEducationBootstrap = useCallback(async () => {
+    if (!isEducationStudio || !educationRunId) {
+      return;
+    }
+    if (bootstrappedRunRef.current === educationRunId) {
+      return;
+    }
+    if (bootstrapPromiseRef.current) {
+      await bootstrapPromiseRef.current;
+      return;
+    }
+    const promise = bootstrapRun(educationRunId)
+      .then(() => {
+        bootstrappedRunRef.current = educationRunId;
+      })
+      .catch(() => {
+        // Best-effort bootstrap; chat flow should remain available.
+      })
+      .finally(() => {
+        if (bootstrapPromiseRef.current === promise) {
+          bootstrapPromiseRef.current = null;
+        }
+      });
+    bootstrapPromiseRef.current = promise;
+    await promise;
+  }, [educationRunId, isEducationStudio]);
+
   const { showNotification } = useNotification();
   const [thread, sendMessage] = useThreadStream({
     threadId: isNewThread ? undefined : threadId,
-    context: { ...effectiveContext, agent_name: agent_name },
-    onStart: () => {
+    context: {
+      ...effectiveContext,
+      agent_name: agent_name,
+      ...(educationRunId ? { run_id: educationRunId } : {}),
+    },
+    onStart: (startedThreadId) => {
       setIsNewThread(false);
       // ! Important: Never use next.js router for navigation in this case, otherwise it will cause the thread to re-mount and lose all states. Use native history API instead.
+      const runQuery =
+        educationRunId && isEducationStudio
+          ? `?run_id=${encodeURIComponent(educationRunId)}`
+          : "";
       history.replaceState(
         null,
         "",
-        `/workspace/agents/${agent_name}/chats/${threadId}`,
+        `/workspace/agents/${agent_name}/chats/${startedThreadId}${runQuery}`,
       );
+      if (educationRunId) {
+        void updateEducationRun(educationRunId, {
+          thread_id: startedThreadId,
+        }).catch(() => {
+          // Best-effort binding; chat flow should not be blocked.
+        });
+      }
     },
     onFinish: (state) => {
       if (document.hidden || !document.hasFocus()) {
@@ -88,20 +161,26 @@ export default function AgentChatPage() {
   });
 
   const handleSubmit = useCallback(
-    (message: PromptInputMessage) => {
-      void sendMessage(threadId, message, { agent_name });
+    async (message: PromptInputMessage) => {
+      await ensureEducationBootstrap();
+      await sendMessage(threadId, message, {
+        agent_name,
+        ...(educationRunId ? { run_id: educationRunId } : {}),
+      });
     },
-    [sendMessage, threadId, agent_name],
+    [sendMessage, threadId, agent_name, educationRunId, ensureEducationBootstrap],
   );
   const handleCheckpointOptionSelect = useCallback(
     async (value: string, checkpoint: EducationCheckpoint) => {
+      await ensureEducationBootstrap();
       if (
         checkpoint.checkpoint_id === "cp1-task-confirmation" ||
         checkpoint.checkpoint_id === "cp2-goal-lock" ||
-        checkpoint.checkpoint_id === "cp3-draft-review"
+        checkpoint.checkpoint_id === "cp3-draft-review" ||
+        checkpoint.checkpoint_id === "cp4-asset-extraction-confirm"
       ) {
         void decideCheckpoint({
-          run_id: threadId,
+          run_id: educationRunId ?? threadId,
           checkpoint_id: checkpoint.checkpoint_id,
           option: value,
         }).catch(() => {
@@ -115,10 +194,13 @@ export default function AgentChatPage() {
           text: value,
           files: [],
         },
-        { agent_name },
+        {
+          agent_name,
+          ...(educationRunId ? { run_id: educationRunId } : {}),
+        },
       );
     },
-    [agent_name, sendMessage, threadId],
+    [agent_name, educationRunId, sendMessage, threadId, ensureEducationBootstrap],
   );
 
   const handleStop = useCallback(async () => {
@@ -229,7 +311,10 @@ export default function AgentChatPage() {
             </div>
 
             {isEducationStudio && (
-              <EducationMemoryPanel agentName={agent_name} runId={threadId} />
+              <EducationMemoryPanel
+                agentName={agent_name}
+                runId={educationRunId ?? threadId}
+              />
             )}
           </main>
         </div>

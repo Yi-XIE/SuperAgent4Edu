@@ -77,8 +77,9 @@ def test_soul_contains_checkpoint_contract_for_frontend_cards():
 
     required_contexts = [
         "任务确认点：请确认本轮课程设计约束",
-        "课程目标锁定点：请确认 UbD 目标与项目方向",
+        "课程蓝图锁定点：请确认 UbD 目标与项目方向",
         "草案评审点：请确认最终课程包",
+        "素材提取确认：请确认候选素材入库策略",
     ]
     for context in required_contexts:
         assert context in soul
@@ -97,6 +98,9 @@ def test_soul_contains_checkpoint_contract_for_frontend_cards():
         "重做活动流程",
         "重做学具附录",
         "重做最终整理",
+        "一键入库",
+        "跳过本轮",
+        "调整分类后入库",
         "仅调整课程目标与评价",
         "仅调整学习活动",
         "仅调整学具附录",
@@ -153,11 +157,11 @@ def test_soul_contains_checkpoint_rework_rules():
     assert "If checkpoint 2 says `调整研究重点`" in soul
     assert "If checkpoint 3 says `重做学具附录`" in soul
     assert "If checkpoint 3 says `重做最终整理`" in soul
-    assert "- `Critic`" in soul
+    assert "`Critic`" in soul
     assert "Draft review guardrail:" in soul
     assert "do NOT continue local reruns" in soul
     assert "Legacy option aliases must remain valid" in soul
-    assert "- `Reviewer`" in soul
+    assert "`Reviewer`" in soul
 
 
 def test_soul_contains_reviewer_stage_contract():
@@ -167,6 +171,7 @@ def test_soul_contains_reviewer_stage_contract():
     assert "### Stage 7. Critic" in soul
     assert "[Reviewer] 课程质量评审" in soul
     assert "[Critic] 挑战性复核" in soul
+    assert "### Checkpoint 4. Asset Extraction Confirm" in soul
     assert "reviewer-summary.json" in soul
     assert "critic-summary.json" in soul
     assert "agreement_with_reviewer" in soul
@@ -196,5 +201,6 @@ def test_checkpoint_context_headings_follow_expected_pattern():
 
     headings = re.findall(r"`context`:\s*`([^`]+)`", soul)
     assert "任务确认点：请确认本轮课程设计约束" in headings
-    assert "课程目标锁定点：请确认 UbD 目标与项目方向" in headings
+    assert "课程蓝图锁定点：请确认 UbD 目标与项目方向" in headings
     assert "草案评审点：请确认最终课程包" in headings
+    assert "素材提取确认：请确认候选素材入库策略" in headings

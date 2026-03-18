@@ -27,7 +27,16 @@ export interface EducationTaskBrief {
 export type EducationCheckpointType =
   | "task_confirmation"
   | "goal_lock"
-  | "draft_review";
+  | "draft_review"
+  | "asset_extraction_confirm";
+
+export type GenerationMode = "from_scratch" | "material_first" | "mixed";
+export type StageStatus = "pending" | "running" | "completed" | "failed";
+export type AssetExtractionStatus =
+  | "pending"
+  | "ready_for_confirmation"
+  | "confirmed"
+  | "skipped";
 
 export interface EducationCheckpointOption {
   index: number;
@@ -150,7 +159,8 @@ export interface CheckpointHistoryItem {
   checkpoint_id:
     | "cp1-task-confirmation"
     | "cp2-goal-lock"
-    | "cp3-draft-review";
+    | "cp3-draft-review"
+    | "cp4-asset-extraction-confirm";
   raw_option: string;
   normalized_option: string;
   actor_user_id: string;
@@ -164,9 +174,23 @@ export interface EducationRunState {
   org_id: string;
   project_id: string;
   title: string;
+  thread_id?: string | null;
+  bootstrap_status?: "pending" | "ready" | "failed";
+  bootstrap_at?: string | null;
   agent_name: string;
+  generation_mode: GenerationMode;
+  critic_enabled: boolean;
+  critic_policy: "manual_on" | "manual_off" | "auto";
+  critic_activation_reason?: string | null;
   status: "running" | "awaiting_checkpoint" | "rework" | "accepted" | "closed";
   current_stage: string;
+  blueprint_status: StageStatus;
+  package_status: StageStatus;
+  asset_extraction_status: AssetExtractionStatus;
+  workflow_template_id?: string | null;
+  asset_retrieval_notes: string[];
+  selected_asset_ids: string[];
+  retrieval_snapshot_at?: string | null;
   guard: RerunGuardState;
   checkpoint_history: CheckpointHistoryItem[];
   rerun_targets: string[];
@@ -207,6 +231,106 @@ export interface EducationResource {
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export type TeachingAssetType =
+  | "goal_fragment"
+  | "driving_question"
+  | "activity_idea"
+  | "learning_kit_plan"
+  | "reference_note"
+  | "expression_template";
+
+export interface CourseBlueprint {
+  id: string;
+  org_id: string;
+  run_id: string;
+  title: string;
+  big_ideas: string[];
+  essential_questions: string[];
+  transfer_goals: string[];
+  project_direction: string;
+  research_summary: string;
+  source_brief_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CoursePackage {
+  id: string;
+  org_id: string;
+  run_id: string;
+  blueprint_id?: string | null;
+  summary: string;
+  lesson_plan_path: string;
+  ppt_outline_path: string;
+  learning_kit_path: string;
+  reference_summary_path: string;
+  artifact_manifest_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EducationRunResult {
+  run: EducationRunState;
+  blueprint?: CourseBlueprint | null;
+  package?: CoursePackage | null;
+  artifact_paths: string[];
+  parse_errors: string[];
+  extraction_candidates: AssetExtractionCandidate[];
+  extracted_assets: TeachingAsset[];
+  retrieval_basis: string[];
+}
+
+export interface TeachingAsset {
+  id: string;
+  org_id: string;
+  asset_type: TeachingAssetType;
+  title: string;
+  content: string;
+  tags: string[];
+  grade_band: string;
+  domain_focus: string[];
+  source_run_id?: string | null;
+  source_path?: string | null;
+  confidence: number;
+  usage_count: number;
+  visibility: "private" | "org_shared";
+  status: "active" | "archived";
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetExtractionCandidate {
+  id: string;
+  org_id: string;
+  run_id: string;
+  asset_type: TeachingAssetType;
+  title: string;
+  content: string;
+  source_path: string;
+  suggested_tags: string[];
+  suggested_visibility: "private" | "org_shared";
+  status: "candidate" | "accepted" | "skipped";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeachingFeedback {
+  id: string;
+  org_id: string;
+  run_id: string;
+  user_id: string;
+  used_sections: string[];
+  changed_sections: string[];
+  ineffective_sections: string[];
+  asset_ids: string[];
+  summary: string;
+  rating?: number | null;
+  source: "manual" | "student_review";
+  submission_id?: string | null;
+  created_at: string;
 }
 
 export interface StudentTask {
@@ -261,9 +385,12 @@ export interface EducationWorkbenchData {
   orgs: Org[];
   projects: EducationProject[];
   runs: EducationRunState[];
+  runResults: Record<string, EducationRunResult>;
+  assets: TeachingAsset[];
   templates: EducationTemplate[];
   resources: EducationResource[];
   tasks: StudentTask[];
   submissions: StudentSubmission[];
+  feedback: TeachingFeedback[];
   auditLogs: AuditLogEntry[];
 }

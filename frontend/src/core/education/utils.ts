@@ -18,14 +18,29 @@ const CHECKPOINT_META: Record<
     type: "task_confirmation",
     title: "任务确认点",
   },
+  "课程蓝图锁定点": {
+    type: "goal_lock",
+    title: "课程蓝图锁定点",
+  },
   "课程目标锁定点": {
     type: "goal_lock",
-    title: "课程目标锁定点",
+    title: "课程蓝图锁定点",
   },
   "草案评审点": {
     type: "draft_review",
     title: "草案评审点",
   },
+  "素材提取确认": {
+    type: "asset_extraction_confirm",
+    title: "素材提取确认",
+  },
+};
+
+const CHECKPOINT_ID_BY_TYPE: Record<EducationCheckpointType, string> = {
+  task_confirmation: "cp1-task-confirmation",
+  goal_lock: "cp2-goal-lock",
+  draft_review: "cp3-draft-review",
+  asset_extraction_confirm: "cp4-asset-extraction-confirm",
 };
 
 const EDUCATION_SUBTASK_RULES: Array<{
@@ -34,34 +49,14 @@ const EDUCATION_SUBTASK_RULES: Array<{
   label: string;
 }> = [
   {
-    pattern: /(stage 1|预期结果)/i,
-    stage: "UbD Stage 1",
-    label: "预期结果",
+    pattern: /(task brief|任务简报|blueprint|课程蓝图|stage 1|预期结果|research|场景资料)/i,
+    stage: "Blueprint",
+    label: "课程蓝图",
   },
   {
-    pattern: /(research|场景资料)/i,
-    stage: "Research",
-    label: "场景资料",
-  },
-  {
-    pattern: /(stage 2|证据设计)/i,
-    stage: "UbD Stage 2",
-    label: "证据设计",
-  },
-  {
-    pattern: /(stage 3|pbl 活动)/i,
-    stage: "UbD Stage 3",
-    label: "PBL 活动",
-  },
-  {
-    pattern: /(learning kit|学具附录)/i,
-    stage: "Learning Kit",
-    label: "学具附录",
-  },
-  {
-    pattern: /(presentation|成果整合)/i,
-    stage: "Presentation",
-    label: "成果整合",
+    pattern: /(package|完整课包|stage 2|stage 3|证据设计|pbl 活动|learning kit|学具附录|presentation|成果整合)/i,
+    stage: "Package",
+    label: "完整课包",
   },
   {
     pattern: /(reviewer|课程质量评审|质量评审)/i,
@@ -69,9 +64,14 @@ const EDUCATION_SUBTASK_RULES: Array<{
     label: "质量评审",
   },
   {
-    pattern: /(critic|挑战性复核|复核)/i,
+    pattern: /(critic|挑战性复核|复核|严格复核)/i,
     stage: "Critic",
     label: "挑战复核",
+  },
+  {
+    pattern: /(asset retrieval|asset extraction|素材召回|素材提取)/i,
+    stage: "Assets",
+    label: "素材沉淀",
   },
 ];
 
@@ -81,7 +81,7 @@ function stripLeadingMarker(line: string) {
 
 function parseCheckpointHeading(line: string) {
   const cleaned = stripLeadingMarker(line);
-  const match = /^(任务确认点|课程目标锁定点|草案评审点)\s*[:：]?\s*(.*)$/u.exec(
+  const match = /^(任务确认点|课程蓝图锁定点|课程目标锁定点|草案评审点|素材提取确认)\s*[:：]?\s*(.*)$/u.exec(
     cleaned,
   );
   if (!match) {
@@ -205,6 +205,7 @@ export function getEducationPromptTemplate() {
     "课程主题：",
     "适用年级：",
     "课时数：",
+    "生成策略：from_scratch / material_first / mixed",
     "课程方向：人工智能教育 / 科学教育 / 融合",
     "UbD重点：大概念 / 核心问题 / 迁移目标",
     "PBL重点：驱动性问题 / 项目成果 / 小组方式",
@@ -259,7 +260,8 @@ export function parseEducationCheckpoint(
     context,
     summary: metadata.summary,
     question,
-    checkpoint_id: metadata.checkpoint_id,
+    checkpoint_id:
+      metadata.checkpoint_id ?? CHECKPOINT_ID_BY_TYPE[heading.type],
     recommended_option: metadata.recommended_option,
     retry_target: metadata.retry_target,
     details: metadata.details,

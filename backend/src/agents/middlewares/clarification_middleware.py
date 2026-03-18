@@ -33,6 +33,13 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     """
 
     state_schema = ClarificationMiddlewareState
+    _CHECKPOINT_HEADINGS = (
+        "任务确认点",
+        "课程蓝图锁定点",
+        "课程目标锁定点",
+        "草案评审点",
+        "素材提取确认",
+    )
 
     def _is_chinese(self, text: str) -> bool:
         """Check if text contains Chinese characters.
@@ -94,6 +101,33 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
 
         return [str(raw_options).strip()] if str(raw_options).strip() else []
 
+    def _extract_checkpoint_context_and_options(self, question: str) -> tuple[str | None, str, list[str]]:
+        """Normalize free-form checkpoint text into structured context/question/options."""
+        lines = [line.strip() for line in question.splitlines() if line.strip()]
+        if not lines:
+            return None, question, []
+
+        context: str | None = None
+        body_lines = lines
+        heading_pattern = r"^(任务确认点|课程蓝图锁定点|课程目标锁定点|草案评审点|素材提取确认)\s*[:：]?\s*(.*)$"
+        match = re.match(heading_pattern, lines[0])
+        if match:
+            context = lines[0]
+            body_lines = lines[1:]
+            if not body_lines and match.group(2):
+                body_lines = [match.group(2).strip()]
+
+        option_lines = [line for line in body_lines if re.match(r"^\d+\.\s+", line)]
+        options = []
+        for line in option_lines:
+            opt_match = re.match(r"^\d+\.\s+(.+)$", line)
+            if opt_match:
+                options.append(opt_match.group(1).strip())
+
+        normalized_body = [line for line in body_lines if line not in option_lines]
+        normalized_question = "\n".join(normalized_body).strip() or question.strip()
+        return context, normalized_question, options
+
     def _format_clarification_message(self, args: dict) -> str:
         """Format the clarification arguments into a user-friendly message.
 
@@ -107,6 +141,13 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         clarification_type = args.get("clarification_type", "missing_info")
         context = args.get("context")
         options = self._normalize_options(args.get("options", []))
+        if isinstance(question, str):
+            inferred_context, normalized_question, inferred_options = self._extract_checkpoint_context_and_options(question)
+            question = normalized_question
+            if not context and inferred_context:
+                context = inferred_context
+            if not options and inferred_options:
+                options = inferred_options
 
         # Type-specific icons
         type_icons = {
@@ -118,6 +159,11 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         }
 
         icon = type_icons.get(clarification_type, "❓")
+
+        if isinstance(context, str):
+            context = context.strip()
+            if not any(context.startswith(prefix) for prefix in self._CHECKPOINT_HEADINGS):
+                context = context
 
         # Build the message naturally
         message_parts = []

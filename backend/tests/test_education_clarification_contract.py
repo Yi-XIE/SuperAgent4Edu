@@ -20,7 +20,7 @@ def _parse_like_frontend(content: str) -> dict | None:
         return None
 
     heading = re.sub(r"^[^A-Za-z0-9\u4e00-\u9fa5\[]+", "", body_lines[0]).strip()
-    match = re.match(r"^(任务确认点|课程目标锁定点|草案评审点)\s*[:：]?\s*(.*)$", heading)
+    match = re.match(r"^(任务确认点|课程蓝图锁定点|课程目标锁定点|草案评审点|素材提取确认)\s*[:：]?\s*(.*)$", heading)
     if not match:
         return None
 
@@ -69,14 +69,14 @@ def test_all_three_education_checkpoints_are_frontend_parseable():
         {
             "question": "是否继续进入评价与活动设计？",
             "clarification_type": "approach_choice",
-            "context": "课程目标锁定点：请确认 UbD 目标与项目方向",
+            "context": "课程蓝图锁定点：请确认 UbD 目标与项目方向",
             "options": [
                 "继续生成评价与活动",
                 "调整学习目标",
                 "调整项目方向",
                 "调整研究重点",
             ],
-            "expected_title": "课程目标锁定点",
+            "expected_title": "课程蓝图锁定点",
         },
         {
             "question": "请确认最终课程包是否接受。",
@@ -91,6 +91,17 @@ def test_all_three_education_checkpoints_are_frontend_parseable():
                 "重做最终整理",
             ],
             "expected_title": "草案评审点",
+        },
+        {
+            "question": "请确认候选素材是否入库。",
+            "clarification_type": "suggestion",
+            "context": "素材提取确认：请确认候选素材入库策略",
+            "options": [
+                "一键入库",
+                "跳过本轮",
+                "调整分类后入库",
+            ],
+            "expected_title": "素材提取确认",
         },
     ]
 
@@ -176,7 +187,7 @@ def test_checkpoint_with_metadata_lines_keeps_card_parse_contract():
                 "details: 若选择调整研究重点，仅回退研究相关链路。"
             ),
             "clarification_type": "approach_choice",
-            "context": "课程目标锁定点：请确认 UbD 目标与项目方向",
+            "context": "课程蓝图锁定点：请确认 UbD 目标与项目方向",
             "options": [
                 "继续生成评价与活动",
                 "调整学习目标",
@@ -188,7 +199,7 @@ def test_checkpoint_with_metadata_lines_keeps_card_parse_contract():
 
     parsed = _parse_like_frontend(message)
     assert parsed is not None
-    assert parsed["title"] == "课程目标锁定点"
+    assert parsed["title"] == "课程蓝图锁定点"
     assert parsed["checkpoint_id"] == "cp2-goal-lock"
     assert parsed["recommended_option"] == "1"
     assert parsed["retry_target"] == "Research"
@@ -200,7 +211,7 @@ def test_options_stringified_json_array_is_normalized_to_real_options():
         {
             "question": "请选择下一步。",
             "clarification_type": "approach_choice",
-            "context": "课程目标锁定点：请确认 UbD 目标与项目方向",
+            "context": "课程蓝图锁定点：请确认 UbD 目标与项目方向",
             "options": '["继续生成评价与活动","调整学习目标","调整项目方向"]',
         }
     )
@@ -228,3 +239,25 @@ def test_options_plain_string_keeps_single_option_without_char_split():
     parsed = _parse_like_frontend(message)
     assert parsed is not None
     assert parsed["options"] == ["继续并锁定当前任务约束"]
+
+
+def test_free_text_checkpoint_question_is_normalized_without_structured_options():
+    middleware = ClarificationMiddleware()
+    message = middleware._format_clarification_message(
+        {
+            "question": (
+                "草案评审点：请确认最终课程包\n"
+                "请按质量风险选择下一步。\n"
+                "1. 接受\n"
+                "2. 重做活动流程\n"
+                "3. 重做学具附录\n"
+            ),
+            "clarification_type": "suggestion",
+            "options": [],
+        }
+    )
+
+    parsed = _parse_like_frontend(message)
+    assert parsed is not None
+    assert parsed["title"] == "草案评审点"
+    assert parsed["options"] == ["接受", "重做活动流程", "重做学具附录"]

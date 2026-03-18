@@ -326,6 +326,46 @@ def _get_memory_context(agent_name: str | None = None, run_id: str | None = None
         return ""
 
 
+def _get_education_run_context(agent_name: str | None, run_id: str | None) -> str:
+    if agent_name != "education-course-studio" or not run_id:
+        return ""
+    try:
+        from src.education.schemas import EducationRunState
+        from src.education.store import get_education_store
+
+        store = get_education_store()
+        state = store.read_state()
+        raw = state.get("runs", {}).get(run_id)
+        if not isinstance(raw, dict):
+            for item in state.get("runs", {}).values():
+                if not isinstance(item, dict):
+                    continue
+                if item.get("thread_id") == run_id:
+                    raw = item
+                    break
+        if not isinstance(raw, dict):
+            return ""
+        run = EducationRunState(**raw)
+        lines = [
+            f"run_id: {run.id}",
+            f"generation_mode: {run.generation_mode}",
+            f"critic_policy: {run.critic_policy}",
+            f"critic_enabled: {str(run.critic_enabled).lower()}",
+            f"workflow_template_id: {run.workflow_template_id or 'none'}",
+            f"thread_id: {run.thread_id or 'none'}",
+            f"bootstrap_status: {run.bootstrap_status}",
+            f"blueprint_status: {run.blueprint_status}",
+            f"package_status: {run.package_status}",
+        ]
+        if run.asset_retrieval_notes:
+            lines.append("retrieval_notes:")
+            lines.extend([f"- {item}" for item in run.asset_retrieval_notes[:4]])
+        return "<education_run_context>\n" + "\n".join(lines) + "\n</education_run_context>\n"
+    except Exception as e:
+        print(f"Failed to load education run context: {e}")
+        return ""
+
+
 def get_skills_prompt_section(available_skills: set[str] | None = None) -> str:
     """Generate the skills prompt section with available skills list.
 
@@ -388,6 +428,7 @@ def apply_prompt_template(
 ) -> str:
     # Get memory context
     memory_context = _get_memory_context(agent_name, run_id=run_id)
+    education_context = _get_education_run_context(agent_name, run_id)
 
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
@@ -419,7 +460,7 @@ def apply_prompt_template(
         agent_name=agent_name or "DeerFlow 2.0",
         soul=get_agent_soul(agent_name),
         skills_section=skills_section,
-        memory_context=memory_context,
+        memory_context=memory_context + education_context,
         subagent_section=subagent_section,
         subagent_reminder=subagent_reminder,
         subagent_thinking=subagent_thinking,

@@ -1,10 +1,12 @@
 """Education project APIs."""
 
 from datetime import datetime, timezone
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.education.audit import write_audit_log
+from src.education.bootstrap import bootstrap_run_state
 from src.education.rate_limit import make_rate_limiter
 from src.education.rbac import require_permission_dep
 from src.education.schemas import (
@@ -138,10 +140,32 @@ async def create_project_run(
         org_id=project.org_id,
         project_id=project.id,
         title=payload.title,
+        thread_id=str(uuid.uuid4()) if payload.start_chat else None,
+        bootstrap_status="pending",
         current_stage=payload.current_stage,
+        generation_mode=payload.generation_mode,
+        critic_enabled=bool(payload.critic_enabled) if payload.critic_enabled is not None else False,
+        critic_policy=(
+            payload.critic_policy
+            if payload.critic_policy is not None
+            else (
+                "manual_on"
+                if bool(payload.critic_enabled) is True
+                else "manual_off"
+            )
+        ),
+        workflow_template_id=payload.workflow_template_id,
+        blueprint_status="pending",
+        package_status="pending",
+        asset_extraction_status="pending",
     )
+    if run.critic_policy == "manual_on":
+        run.critic_enabled = True
+    elif run.critic_policy == "manual_off":
+        run.critic_enabled = False
 
     def _mutate(state: dict):
+        bootstrap_run_state(state, run)
         state["runs"][run.id] = run.model_dump()
         return state["runs"][run.id]
 

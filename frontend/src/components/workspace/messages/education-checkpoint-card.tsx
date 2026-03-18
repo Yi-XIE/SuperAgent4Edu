@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArchiveIcon,
   ClipboardCheckIcon,
   FileCheck2Icon,
   TargetIcon,
@@ -24,6 +25,7 @@ const CHECKPOINT_ICON = {
   task_confirmation: ClipboardCheckIcon,
   goal_lock: TargetIcon,
   draft_review: FileCheck2Icon,
+  asset_extraction_confirm: ArchiveIcon,
 } as const;
 
 export function EducationCheckpointCard({
