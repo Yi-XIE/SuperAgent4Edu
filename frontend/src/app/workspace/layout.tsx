@@ -14,18 +14,20 @@ export default function WorkspaceLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const [settings, setSettings] = useLocalSettings();
+  const sidebarOpen = !settings.layout.sidebar_collapsed;
+
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      if (settings.layout.sidebar_collapsed === !open) return;
       setSettings("layout", { sidebar_collapsed: !open });
     },
-    [setSettings, settings.layout.sidebar_collapsed],
+    [setSettings],
   );
+
   return (
     <QueryClientProvider client={queryClient}>
       <SidebarProvider
         className="h-screen"
-        defaultOpen={!settings.layout.sidebar_collapsed}
+        open={sidebarOpen}
         onOpenChange={handleOpenChange}
       >
         <WorkspaceSidebar />
