@@ -2,7 +2,7 @@
 
 import { BotIcon, PlusSquare } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,18 @@ import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { ChatBox, useThreadChat } from "@/components/workspace/chats";
 import { InputBox } from "@/components/workspace/input-box";
+import { EducationMemoryPanel } from "@/components/workspace/messages/education-memory-panel";
 import { MessageList } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
+import {
+  decideCheckpoint,
+  isEducationAgent,
+  type EducationCheckpoint,
+} from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings } from "@/core/settings";
@@ -34,13 +40,26 @@ export default function AgentChatPage() {
   }>();
 
   const { agent } = useAgent(agent_name);
+  const isEducationStudio = isEducationAgent(agent_name);
 
   const { threadId, isNewThread, setIsNewThread } = useThreadChat();
+  const effectiveContext = useMemo(
+    () =>
+      isEducationStudio
+        ? {
+            ...settings.context,
+            mode: settings.context.mode ?? ("ultra" as const),
+            reasoning_effort:
+              settings.context.reasoning_effort ?? ("high" as const),
+          }
+        : settings.context,
+    [isEducationStudio, settings.context],
+  );
 
   const { showNotification } = useNotification();
   const [thread, sendMessage] = useThreadStream({
     threadId: isNewThread ? undefined : threadId,
-    context: { ...settings.context, agent_name: agent_name },
+    context: { ...effectiveContext, agent_name: agent_name },
     onStart: () => {
       setIsNewThread(false);
       // ! Important: Never use next.js router for navigation in this case, otherwise it will cause the thread to re-mount and lose all states. Use native history API instead.
@@ -73,6 +92,33 @@ export default function AgentChatPage() {
       void sendMessage(threadId, message, { agent_name });
     },
     [sendMessage, threadId, agent_name],
+  );
+  const handleCheckpointOptionSelect = useCallback(
+    async (value: string, checkpoint: EducationCheckpoint) => {
+      if (
+        checkpoint.checkpoint_id === "cp1-task-confirmation" ||
+        checkpoint.checkpoint_id === "cp2-goal-lock" ||
+        checkpoint.checkpoint_id === "cp3-draft-review"
+      ) {
+        void decideCheckpoint({
+          run_id: threadId,
+          checkpoint_id: checkpoint.checkpoint_id,
+          option: value,
+        }).catch(() => {
+          // Checkpoint state write is best-effort and should not block chat flow.
+        });
+      }
+
+      await sendMessage(
+        threadId,
+        {
+          text: value,
+          files: [],
+        },
+        { agent_name },
+      );
+    },
+    [agent_name, sendMessage, threadId],
   );
 
   const handleStop = useCallback(async () => {
@@ -118,61 +164,73 @@ export default function AgentChatPage() {
             </div>
           </header>
 
-          <main className="flex min-h-0 max-w-full grow flex-col">
-            <div className="flex size-full justify-center">
-              <MessageList
-                className={cn("size-full", !isNewThread && "pt-10")}
-                threadId={threadId}
-                thread={thread}
-              />
-            </div>
-
-            <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
-              <div
-                className={cn(
-                  "relative w-full",
-                  isNewThread && "-translate-y-[calc(50vh-96px)]",
-                  isNewThread
-                    ? "max-w-(--container-width-sm)"
-                    : "max-w-(--container-width-md)",
-                )}
-              >
-                <div className="absolute -top-4 right-0 left-0 z-0">
-                  <div className="absolute right-0 bottom-0 left-0">
-                    <TodoList
-                      className="bg-background/5"
-                      todos={thread.values.todos ?? []}
-                      hidden={
-                        !thread.values.todos || thread.values.todos.length === 0
-                      }
-                    />
-                  </div>
-                </div>
-
-                <InputBox
-                  className={cn("bg-background/5 w-full -translate-y-4")}
-                  isNewThread={isNewThread}
-                  threadId={threadId}
-                  autoFocus={isNewThread}
-                  status={thread.isLoading ? "streaming" : "ready"}
-                  context={settings.context}
-                  extraHeader={
-                    isNewThread && (
-                      <AgentWelcome agent={agent} agentName={agent_name} />
-                    )
+          <main className="flex min-h-0 max-w-full grow">
+            <div className="relative flex min-h-0 grow flex-col">
+              <div className="flex size-full justify-center">
+                <MessageList
+                  className={cn("size-full", !isNewThread && "pt-10")}
+                  onClarificationOptionSelect={
+                    isEducationStudio ? handleCheckpointOptionSelect : undefined
                   }
-                  disabled={env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"}
-                  onContextChange={(context) => setSettings("context", context)}
-                  onSubmit={handleSubmit}
-                  onStop={handleStop}
+                  threadId={threadId}
+                  thread={thread}
                 />
-                {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
-                  <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
-                    {t.common.notAvailableInDemoMode}
+              </div>
+
+              <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
+                <div
+                  className={cn(
+                    "relative w-full",
+                    isNewThread && "-translate-y-[calc(50vh-96px)]",
+                    isNewThread
+                      ? "max-w-(--container-width-sm)"
+                      : "max-w-(--container-width-md)",
+                  )}
+                >
+                  <div className="absolute -top-4 right-0 left-0 z-0">
+                    <div className="absolute right-0 bottom-0 left-0">
+                      <TodoList
+                        className="bg-background/5"
+                        todos={thread.values.todos ?? []}
+                        hidden={
+                          !thread.values.todos ||
+                          thread.values.todos.length === 0
+                        }
+                      />
+                    </div>
                   </div>
-                )}
+
+                  <InputBox
+                    className={cn("bg-background/5 w-full -translate-y-4")}
+                    isNewThread={isNewThread}
+                    threadId={threadId}
+                    autoFocus={isNewThread}
+                    status={thread.isLoading ? "streaming" : "ready"}
+                    context={effectiveContext}
+                    extraHeader={
+                      isNewThread && (
+                        <AgentWelcome agent={agent} agentName={agent_name} />
+                      )
+                    }
+                    disabled={env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"}
+                    onContextChange={(context) =>
+                      setSettings("context", context)
+                    }
+                    onSubmit={handleSubmit}
+                    onStop={handleStop}
+                  />
+                  {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
+                    <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
+                      {t.common.notAvailableInDemoMode}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+
+            {isEducationStudio && (
+              <EducationMemoryPanel agentName={agent_name} runId={threadId} />
+            )}
           </main>
         </div>
       </ChatBox>

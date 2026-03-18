@@ -1,9 +1,16 @@
 import type { BaseStream } from "@langchain/langgraph-sdk/react";
+import { useParams } from "next/navigation";
+import { useEffect } from "react";
 
 import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
+import {
+  type EducationCheckpoint,
+  isEducationAgent,
+  parseEducationCheckpoint,
+} from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   extractContentFromMessage,
@@ -23,6 +30,8 @@ import { cn } from "@/lib/utils";
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
 import { StreamingIndicator } from "../streaming-indicator";
 
+import { EducationArtifactSummary } from "./education-artifact-summary";
+import { EducationCheckpointCard } from "./education-checkpoint-card";
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
 import { MessageListItem } from "./message-list-item";
@@ -34,16 +43,78 @@ export function MessageList({
   threadId,
   thread,
   paddingBottom = 160,
+  onClarificationOptionSelect,
 }: {
   className?: string;
   threadId: string;
   thread: BaseStream<AgentThreadState>;
   paddingBottom?: number;
+  onClarificationOptionSelect?: (
+    value: string,
+    checkpoint: EducationCheckpoint,
+  ) => Promise<void> | void;
 }) {
   const { t } = useI18n();
+  const { agent_name } = useParams<{ agent_name?: string }>();
+  const isEducationStudio = isEducationAgent(agent_name);
   const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
   const messages = thread.messages;
+
+  useEffect(() => {
+    for (const message of messages) {
+      if (message.type === "ai") {
+        for (const toolCall of message.tool_calls ?? []) {
+          if (toolCall.name === "task" && toolCall.id) {
+            updateSubtask({
+              id: toolCall.id,
+              subagent_type: toolCall.args.subagent_type,
+              description: toolCall.args.description,
+              prompt: toolCall.args.prompt,
+              status: "in_progress",
+            });
+          }
+        }
+        continue;
+      }
+
+      if (message.type !== "tool") {
+        continue;
+      }
+
+      const taskId = message.tool_call_id;
+      if (!taskId) {
+        continue;
+      }
+
+      const result = extractTextFromMessage(message);
+      if (result.startsWith("Task Succeeded. Result:")) {
+        updateSubtask({
+          id: taskId,
+          status: "completed",
+          result: result.split("Task Succeeded. Result:")[1]?.trim(),
+        });
+      } else if (result.startsWith("Task failed.")) {
+        updateSubtask({
+          id: taskId,
+          status: "failed",
+          error: result.split("Task failed.")[1]?.trim(),
+        });
+      } else if (result.startsWith("Task timed out")) {
+        updateSubtask({
+          id: taskId,
+          status: "failed",
+          error: result,
+        });
+      } else {
+        updateSubtask({
+          id: taskId,
+          status: "in_progress",
+        });
+      }
+    }
+  }, [messages, updateSubtask]);
+
   if (thread.isThreadLoading && messages.length === 0) {
     return <MessageListSkeleton />;
   }
@@ -66,10 +137,26 @@ export function MessageList({
           } else if (group.type === "assistant:clarification") {
             const message = group.messages[0];
             if (message && hasContent(message)) {
+              const content = extractContentFromMessage(message);
+              const checkpoint =
+                isEducationStudio &&
+                onClarificationOptionSelect &&
+                parseEducationCheckpoint(content);
+              if (checkpoint) {
+                return (
+                  <EducationCheckpointCard
+                    key={group.id}
+                    checkpoint={checkpoint}
+                    threadId={threadId}
+                    disabled={thread.isLoading}
+                    onSelect={onClarificationOptionSelect}
+                  />
+                );
+              }
               return (
                 <MarkdownContent
                   key={group.id}
-                  content={extractContentFromMessage(message)}
+                  content={content}
                   isLoading={thread.isLoading}
                   rehypePlugins={rehypePlugins}
                 />
@@ -84,8 +171,17 @@ export function MessageList({
                 files.push(...presentFiles);
               }
             }
+            const manifestPath = files.find((file) =>
+              file.endsWith("/artifact-manifest.json"),
+            );
             return (
               <div className="w-full" key={group.id}>
+                {isEducationStudio && manifestPath && (
+                  <EducationArtifactSummary
+                    manifestPath={manifestPath}
+                    threadId={threadId}
+                  />
+                )}
                 {group.messages[0] && hasContent(group.messages[0]) && (
                   <MarkdownContent
                     content={extractContentFromMessage(group.messages[0])}
@@ -110,39 +206,7 @@ export function MessageList({
                       prompt: toolCall.args.prompt,
                       status: "in_progress",
                     };
-                    updateSubtask(task);
                     tasks.add(task);
-                  }
-                }
-              } else if (message.type === "tool") {
-                const taskId = message.tool_call_id;
-                if (taskId) {
-                  const result = extractTextFromMessage(message);
-                  if (result.startsWith("Task Succeeded. Result:")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "completed",
-                      result: result
-                        .split("Task Succeeded. Result:")[1]
-                        ?.trim(),
-                    });
-                  } else if (result.startsWith("Task failed.")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "failed",
-                      error: result.split("Task failed.")[1]?.trim(),
-                    });
-                  } else if (result.startsWith("Task timed out")) {
-                    updateSubtask({
-                      id: taskId,
-                      status: "failed",
-                      error: result,
-                    });
-                  } else {
-                    updateSubtask({
-                      id: taskId,
-                      status: "in_progress",
-                    });
                   }
                 }
               }
@@ -162,7 +226,7 @@ export function MessageList({
               }
               results.push(
                 <div
-                  key="subtask-count"
+                  key={"subtask-count-" + message.id}
                   className="text-muted-foreground font-norma pt-2 text-sm"
                 >
                   {t.subtasks.executing(tasks.size)}

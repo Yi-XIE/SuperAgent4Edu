@@ -3,15 +3,16 @@ import {
   useCallback,
   useContext,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 
-import { useSidebar } from "@/components/ui/sidebar";
 import { env } from "@/env";
 
 export interface ArtifactsContextType {
   artifacts: string[];
-  setArtifacts: (artifacts: string[]) => void;
+  setArtifacts: Dispatch<SetStateAction<string[]>>;
 
   selectedArtifact: string | null;
   autoSelect: boolean;
@@ -39,19 +40,16 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
   );
   const [autoOpen, setAutoOpen] = useState(true);
-  const { setOpen: setSidebarOpen } = useSidebar();
 
   const select = useCallback(
     (artifact: string, autoSelect = false) => {
       setSelectedArtifact(artifact);
-      if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true") {
-        setSidebarOpen(false);
-      }
       if (!autoSelect) {
         setAutoSelect(false);
       }
+      setOpen(true);
     },
-    [setSidebarOpen, setSelectedArtifact, setAutoSelect],
+    [setSelectedArtifact, setAutoSelect, setOpen],
   );
 
   const deselect = useCallback(() => {

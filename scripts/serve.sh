@@ -8,6 +8,21 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+export DEER_FLOW_HOME="${DEER_FLOW_HOME:-$REPO_ROOT/backend/.deer-flow}"
+
+if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/.env"
+    set +a
+fi
+
+if [ -f "$REPO_ROOT/backend/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/backend/.env"
+    set +a
+fi
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -24,6 +39,20 @@ if $DEV_MODE; then
     FRONTEND_CMD="pnpm run dev"
 else
     FRONTEND_CMD="env BETTER_AUTH_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+    UV_RUN_CMD=(uv run)
+elif python3 -c "import uv" >/dev/null 2>&1; then
+    UV_RUN_CMD=(python3 -m uv run)
+else
+    UV_RUN_CMD=()
+fi
+
+if command -v nginx >/dev/null 2>&1; then
+    HAS_NGINX=true
+else
+    HAS_NGINX=false
 fi
 
 # ── Stop existing services ────────────────────────────────────────────────────
@@ -58,7 +87,11 @@ echo ""
 echo "Services starting up..."
 echo "  → Backend: LangGraph + Gateway"
 echo "  → Frontend: Next.js"
-echo "  → Nginx: Reverse Proxy"
+if $HAS_NGINX; then
+    echo "  → Nginx: Reverse Proxy"
+else
+    echo "  → Nginx: not installed, using direct frontend/backend mode"
+fi
 echo ""
 
 # ── Config check ─────────────────────────────────────────────────────────────
@@ -78,6 +111,9 @@ if ! { \
     exit 1
 fi
 
+echo "Syncing education demo assets..."
+"$REPO_ROOT/scripts/sync-education-assets.sh"
+
 # ── Cleanup trap ─────────────────────────────────────────────────────────────
 
 cleanup() {
@@ -90,13 +126,15 @@ cleanup() {
     pkill -f "next start" 2>/dev/null || true
     # Kill nginx using the captured PID first (most reliable),
     # then fall back to pkill/killall for any stray nginx workers.
-    if [ -n "${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
-        kill -TERM "$NGINX_PID" 2>/dev/null || true
-        sleep 1
-        kill -9 "$NGINX_PID" 2>/dev/null || true
+    if $HAS_NGINX; then
+        if [ -n "${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
+            kill -TERM "$NGINX_PID" 2>/dev/null || true
+            sleep 1
+            kill -9 "$NGINX_PID" 2>/dev/null || true
+        fi
+        pkill -9 nginx 2>/dev/null || true
+        killall -9 nginx 2>/dev/null || true
     fi
-    pkill -9 nginx 2>/dev/null || true
-    killall -9 nginx 2>/dev/null || true
     echo "Cleaning up sandbox containers..."
     ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
@@ -117,7 +155,14 @@ else
 fi
 
 echo "Starting LangGraph server..."
-(cd backend && NO_COLOR=1 uv run langgraph dev --no-browser --allow-blocking $LANGGRAPH_EXTRA_FLAGS > ../logs/langgraph.log 2>&1) &
+if [ ${#UV_RUN_CMD[@]} -gt 0 ]; then
+    (cd backend && NO_COLOR=1 "${UV_RUN_CMD[@]}" langgraph dev --no-browser --allow-blocking $LANGGRAPH_EXTRA_FLAGS > ../logs/langgraph.log 2>&1) &
+elif [ -x backend/.venv/bin/langgraph ]; then
+    (cd backend && NO_COLOR=1 .venv/bin/langgraph dev --no-browser --allow-blocking $LANGGRAPH_EXTRA_FLAGS > ../logs/langgraph.log 2>&1) &
+else
+    echo "✗ Cannot start LangGraph: neither uv nor backend/.venv/bin/langgraph is available."
+    exit 1
+fi
 ./scripts/wait-for-port.sh 2024 60 "LangGraph" || {
     echo "  See logs/langgraph.log for details"
     tail -20 logs/langgraph.log
@@ -126,7 +171,14 @@ echo "Starting LangGraph server..."
 echo "✓ LangGraph server started on localhost:2024"
 
 echo "Starting Gateway API..."
-(cd backend && uv run uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1) &
+if [ ${#UV_RUN_CMD[@]} -gt 0 ]; then
+    (cd backend && "${UV_RUN_CMD[@]}" uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1) &
+elif [ -x backend/.venv/bin/uvicorn ]; then
+    (cd backend && .venv/bin/uvicorn src.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1) &
+else
+    echo "✗ Cannot start Gateway API: neither uv nor backend/.venv/bin/uvicorn is available."
+    exit 1
+fi
 ./scripts/wait-for-port.sh 8001 30 "Gateway API" || {
     echo "✗ Gateway API failed to start. Last log output:"
     tail -60 logs/gateway.log
@@ -146,15 +198,17 @@ echo "Starting Frontend..."
 }
 echo "✓ Frontend started on localhost:3000"
 
-echo "Starting Nginx reverse proxy..."
-nginx -g 'daemon off;' -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" > logs/nginx.log 2>&1 &
-NGINX_PID=$!
-./scripts/wait-for-port.sh 2026 10 "Nginx" || {
-    echo "  See logs/nginx.log for details"
-    tail -10 logs/nginx.log
-    cleanup
-}
-echo "✓ Nginx started on localhost:2026"
+if $HAS_NGINX; then
+    echo "Starting Nginx reverse proxy..."
+    nginx -g 'daemon off;' -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" > logs/nginx.log 2>&1 &
+    NGINX_PID=$!
+    ./scripts/wait-for-port.sh 2026 10 "Nginx" || {
+        echo "  See logs/nginx.log for details"
+        tail -10 logs/nginx.log
+        cleanup
+    }
+    echo "✓ Nginx started on localhost:2026"
+fi
 
 # ── Ready ─────────────────────────────────────────────────────────────────────
 
@@ -167,15 +221,23 @@ else
 fi
 echo "=========================================="
 echo ""
-echo "  🌐 Application: http://localhost:2026"
-echo "  📡 API Gateway: http://localhost:2026/api/*"
-echo "  🤖 LangGraph:   http://localhost:2026/api/langgraph/*"
+if $HAS_NGINX; then
+    echo "  🌐 Application: http://localhost:2026"
+    echo "  📡 API Gateway: http://localhost:2026/api/*"
+    echo "  🤖 LangGraph:   http://localhost:2026/api/langgraph/*"
+else
+    echo "  🌐 Application: http://localhost:3000"
+    echo "  📡 API Gateway: http://localhost:8001/api/*"
+    echo "  🤖 LangGraph:   http://localhost:2024"
+fi
 echo ""
 echo "  📋 Logs:"
 echo "     - LangGraph: logs/langgraph.log"
 echo "     - Gateway:   logs/gateway.log"
 echo "     - Frontend:  logs/frontend.log"
-echo "     - Nginx:     logs/nginx.log"
+if $HAS_NGINX; then
+    echo "     - Nginx:     logs/nginx.log"
+fi
 echo ""
 echo "Press Ctrl+C to stop all services"
 

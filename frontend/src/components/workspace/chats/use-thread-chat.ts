@@ -1,29 +1,50 @@
 "use client";
 
-import { useParams, usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { uuid } from "@/core/utils/uuid";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUUID(value: string | undefined) {
+  return Boolean(value && UUID_RE.test(value));
+}
+
 export function useThreadChat() {
   const { thread_id: threadIdFromPath } = useParams<{ thread_id: string }>();
-  const pathname = usePathname();
-
   const searchParams = useSearchParams();
+  const isPathNew = threadIdFromPath === "new";
+  const isPathInvalid = !isPathNew && !isUUID(threadIdFromPath);
+  const shouldCreateNewThread = isPathNew || isPathInvalid;
+  const prevPathRef = useRef<string | undefined>(threadIdFromPath);
+
   const [threadId, setThreadId] = useState(() => {
-    return threadIdFromPath === "new" ? uuid() : threadIdFromPath;
+    return shouldCreateNewThread ? uuid() : threadIdFromPath;
   });
 
   const [isNewThread, setIsNewThread] = useState(
-    () => threadIdFromPath === "new",
+    () => shouldCreateNewThread,
   );
 
   useEffect(() => {
-    if (pathname.endsWith("/new")) {
-      setIsNewThread(true);
-      setThreadId(uuid());
+    if (prevPathRef.current === threadIdFromPath) {
+      return;
     }
-  }, [pathname]);
+    prevPathRef.current = threadIdFromPath;
+
+    if (shouldCreateNewThread) {
+      const nextThreadId = uuid();
+      setIsNewThread((prev) => (prev ? prev : true));
+      setThreadId((prev) => (prev === nextThreadId ? prev : nextThreadId));
+      return;
+    }
+
+    setIsNewThread((prev) => (prev ? false : prev));
+    setThreadId((prev) => (prev === threadIdFromPath ? prev : threadIdFromPath));
+  }, [shouldCreateNewThread, threadIdFromPath]);
+
   const isMock = searchParams.get("mock") === "true";
   return { threadId, isNewThread, setIsNewThread, isMock };
 }
