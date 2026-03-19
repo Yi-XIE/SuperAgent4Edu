@@ -13,14 +13,15 @@ import {
 
 export function WorkspaceNavChatList() {
   const pathname = usePathname();
+  const isWorkflowActive = pathname.startsWith("/workspace/education/templates");
+  const isEducationActive =
+    pathname.startsWith("/workspace/education") && !isWorkflowActive;
+
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/education")}
-            asChild
-          >
+          <SidebarMenuButton isActive={isEducationActive} asChild>
             <Link className="text-muted-foreground" href="/workspace/education">
               <BookOpenCheckIcon />
               <span>知识花园</span>
@@ -28,10 +29,7 @@ export function WorkspaceNavChatList() {
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/education/templates")}
-            asChild
-          >
+          <SidebarMenuButton isActive={isWorkflowActive} asChild>
             <Link
               className="text-muted-foreground"
               href="/workspace/education/templates"
