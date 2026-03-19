@@ -110,6 +110,28 @@ def test_soul_contains_checkpoint_contract_for_frontend_cards():
         assert option in soul
 
 
+def test_soul_contains_stage0_card_protocol_for_run_workbench():
+    soul = _load_source_soul()
+
+    required_tokens = [
+        "ALWAYS output two teacher-facing cards as normal assistant text",
+        "任务简报卡",
+        "生成策略确认卡",
+        "course_topic:",
+        "grade_or_level:",
+        "session_count:",
+        "domain_focus:",
+        "existing_assets:",
+        "actions:",
+        "recommended_mode: from_scratch|material_first|mixed",
+        "retrieval_hint:",
+        "Do not render these two cards through `ask_clarification`.",
+        "After the two cards, ALWAYS trigger checkpoint 1 for explicit lock-in.",
+    ]
+    for token in required_tokens:
+        assert token in soul
+
+
 def test_soul_contains_required_file_contracts():
     soul = _load_source_soul()
 

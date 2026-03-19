@@ -8,8 +8,10 @@ import {
 } from "@/components/ai-elements/conversation";
 import {
   type EducationCheckpoint,
+  parseEducationGenerationModeCard,
   isEducationAgent,
   parseEducationCheckpoint,
+  parseEducationTaskBriefCard,
 } from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
 import {
@@ -28,6 +30,8 @@ import type { AgentThreadState } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { EducationGenerationModeCard } from "../education/education-generation-mode-card";
+import { EducationTaskBriefCard } from "../education/education-task-brief-card";
 import { StreamingIndicator } from "../streaming-indicator";
 
 import { EducationArtifactSummary } from "./education-artifact-summary";
@@ -43,12 +47,16 @@ export function MessageList({
   threadId,
   thread,
   paddingBottom = 160,
+  forceEducationStudio,
+  disableEducationInfoCards = false,
   onClarificationOptionSelect,
 }: {
   className?: string;
   threadId: string;
   thread: BaseStream<AgentThreadState>;
   paddingBottom?: number;
+  forceEducationStudio?: boolean;
+  disableEducationInfoCards?: boolean;
   onClarificationOptionSelect?: (
     value: string,
     checkpoint: EducationCheckpoint,
@@ -56,7 +64,10 @@ export function MessageList({
 }) {
   const { t } = useI18n();
   const { agent_name } = useParams<{ agent_name?: string }>();
-  const isEducationStudio = isEducationAgent(agent_name);
+  const isEducationStudio =
+    typeof forceEducationStudio === "boolean"
+      ? forceEducationStudio
+      : isEducationAgent(agent_name);
   const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
   const messages = thread.messages;
@@ -124,7 +135,7 @@ export function MessageList({
     >
       <ConversationContent className="mx-auto w-full max-w-(--container-width-md) gap-8 pt-12">
         {groupMessages(messages, (group) => {
-          if (group.type === "human" || group.type === "assistant") {
+          if (group.type === "human") {
             return group.messages.map((msg) => {
               return (
                 <MessageListItem
@@ -134,6 +145,43 @@ export function MessageList({
                 />
               );
             });
+          } else if (group.type === "assistant") {
+            const message = group.messages[0];
+            if (message && hasContent(message)) {
+              const content = extractContentFromMessage(message);
+              const taskBriefCard =
+                !disableEducationInfoCards &&
+                isEducationStudio &&
+                parseEducationTaskBriefCard(content);
+              if (taskBriefCard) {
+                return (
+                  <EducationTaskBriefCard
+                    key={`task-brief-${group.id}`}
+                    card={taskBriefCard}
+                  />
+                );
+              }
+
+              const generationModeCard =
+                !disableEducationInfoCards &&
+                isEducationStudio &&
+                parseEducationGenerationModeCard(content);
+              if (generationModeCard) {
+                return (
+                  <EducationGenerationModeCard
+                    key={`generation-mode-${group.id}`}
+                    card={generationModeCard}
+                  />
+                );
+              }
+            }
+            return (
+              <MessageGroup
+                key={"group-" + group.id}
+                messages={group.messages}
+                isLoading={thread.isLoading}
+              />
+            );
           } else if (group.type === "assistant:clarification") {
             const message = group.messages[0];
             if (message && hasContent(message)) {

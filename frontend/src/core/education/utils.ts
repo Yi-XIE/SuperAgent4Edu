@@ -4,8 +4,12 @@ import type {
   EducationCheckpoint,
   EducationCheckpointOption,
   EducationCheckpointType,
+  EducationGenerationModeCard,
+  EducationStarterMode,
   EducationSubtaskMeta,
+  EducationTaskBriefCard,
   ReviewerSummary,
+  GenerationMode,
 } from "./types";
 
 export const EDUCATION_AGENT_NAME = "education-course-studio";
@@ -78,6 +82,23 @@ const EDUCATION_SUBTASK_RULES: Array<{
 function stripLeadingMarker(line: string) {
   return line.replace(/^[^A-Za-z0-9\u4e00-\u9fa5\[]+/, "").trim();
 }
+
+const TASK_BRIEF_FIELD_LABELS: Record<string, string> = {
+  course_topic: "课程主题",
+  grade_or_level: "适用年级",
+  session_count: "课时数",
+  domain_focus: "课程方向",
+  pbl: "PBL 要求",
+  learning_kit: "学具要求",
+  existing_assets: "已有素材",
+  teacher_notes: "补充说明",
+};
+
+const GENERATION_MODE_LABELS: Record<GenerationMode, string> = {
+  from_scratch: "从零生成",
+  material_first: "优先吸收已有素材",
+  mixed: "混合模式",
+};
 
 function parseCheckpointHeading(line: string) {
   const cleaned = stripLeadingMarker(line);
@@ -214,6 +235,34 @@ export function getEducationPromptTemplate() {
   ].join("\n");
 }
 
+export function buildEducationStarterPrompt(mode: EducationStarterMode) {
+  if (mode === "quick_generate") {
+    return [
+      "【入口】快速生成课包",
+      "请先根据以下信息生成任务简报卡，再给出生成策略确认卡，等我确认后再继续课程蓝图。",
+      "课程主题：",
+      "适用年级：",
+      "课时数：",
+      "课程方向：",
+      "学具要求：",
+      "补充说明：",
+    ].join("\n");
+  }
+
+  return [
+    "【入口】带着已有想法生成",
+    "请先吸收我的已有想法，整理成任务简报卡，再给出生成策略确认卡，等我确认后再继续课程蓝图。",
+    "课程主题：",
+    "适用年级：",
+    "课时数：",
+    "我已有的目标或想法：",
+    "我已有的活动点子：",
+    "学具限制：",
+    "已有素材：",
+    "补充说明：",
+  ].join("\n");
+}
+
 export function parseEducationCheckpoint(
   content: string,
 ): EducationCheckpoint | null {
@@ -266,6 +315,165 @@ export function parseEducationCheckpoint(
     retry_target: metadata.retry_target,
     details: metadata.details,
     options,
+    rawContent: content,
+  };
+}
+
+export function parseEducationTaskBriefCard(
+  content: string,
+): EducationTaskBriefCard | null {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const headingMatch = /^(任务简报卡|任务简报)\s*[:：]?\s*(.*)$/u.exec(
+    stripLeadingMarker(lines[0] ?? ""),
+  );
+  if (!headingMatch) {
+    return null;
+  }
+
+  const headingTitle = headingMatch[2]?.trim();
+  const title =
+    headingTitle && headingTitle.length > 0 ? headingTitle : "任务简报卡";
+  let summary: string | undefined;
+  const actions: string[] = [];
+  const fields: EducationTaskBriefCard["fields"] = [];
+
+  for (const line of lines.slice(1)) {
+    const match = /^([a-z_]+)\s*:\s*(.+)$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const key = match[1]?.toLowerCase();
+    const value = match[2]?.trim();
+    if (!key || !value) {
+      continue;
+    }
+    if (key === "summary") {
+      summary = value;
+      continue;
+    }
+    if (key === "actions") {
+      actions.push(
+        ...value
+          .split(/[|｜]/u)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      );
+      continue;
+    }
+
+    const label = TASK_BRIEF_FIELD_LABELS[key];
+    if (label) {
+      fields.push({ key, label, value });
+    }
+  }
+
+  if (fields.length === 0 && !summary) {
+    return null;
+  }
+
+  return {
+    title,
+    summary,
+    fields,
+    actions,
+    rawContent: content,
+  };
+}
+
+export function parseEducationGenerationModeCard(
+  content: string,
+): EducationGenerationModeCard | null {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const headingMatch = /^(生成策略确认卡|生成策略确认|生成策略)\s*[:：]?\s*(.*)$/u.exec(
+    stripLeadingMarker(lines[0] ?? ""),
+  );
+  if (!headingMatch) {
+    return null;
+  }
+
+  const headingTitle = headingMatch[2]?.trim();
+  const title =
+    headingTitle && headingTitle.length > 0 ? headingTitle : "生成策略确认卡";
+  let summary: string | undefined;
+  let recommended_mode: GenerationMode | undefined;
+  let retrieval_hint: string | undefined;
+  const options: EducationGenerationModeCard["options"] = [];
+
+  for (const line of lines.slice(1)) {
+    const match = /^([a-z_]+)\s*:\s*(.+)$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const key = match[1]?.toLowerCase();
+    const value = match[2]?.trim();
+    if (!key || !value) {
+      continue;
+    }
+
+    if (key === "summary") {
+      summary = value;
+      continue;
+    }
+    if (key === "recommended_mode") {
+      if (
+        value === "from_scratch" ||
+        value === "material_first" ||
+        value === "mixed"
+      ) {
+        recommended_mode = value;
+      }
+      continue;
+    }
+    if (key === "retrieval_hint") {
+      retrieval_hint = value;
+      continue;
+    }
+    if (
+      key === "from_scratch" ||
+      key === "material_first" ||
+      key === "mixed"
+    ) {
+      options.push({
+        mode: key,
+        description: value,
+      });
+    }
+  }
+
+  if (options.length === 0 && !summary && !recommended_mode) {
+    return null;
+  }
+
+  return {
+    title,
+    summary,
+    recommended_mode,
+    retrieval_hint,
+    options:
+      options.length > 0
+        ? options
+        : (Object.keys(GENERATION_MODE_LABELS) as GenerationMode[]).map(
+            (mode) => ({
+              mode,
+              description: GENERATION_MODE_LABELS[mode],
+            }),
+          ),
     rawContent: content,
   };
 }

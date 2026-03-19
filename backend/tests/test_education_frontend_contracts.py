@@ -88,6 +88,15 @@ def test_frontend_checkpoint_parser_supports_metadata_lines():
     assert "details" in content
 
 
+def test_frontend_has_task_brief_and_generation_mode_parsers():
+    content = _frontend_file("utils.ts").read_text(encoding="utf-8")
+    assert "parseEducationTaskBriefCard" in content
+    assert "parseEducationGenerationModeCard" in content
+    assert "buildEducationStarterPrompt" in content
+    assert "任务简报卡" in content
+    assert "生成策略确认卡" in content
+
+
 def test_checkpoint_card_renders_recommended_retry_and_reviewer_summary():
     content = _message_component_file("education-checkpoint-card.tsx").read_text(encoding="utf-8")
     assert "parseReviewerSummary" in content
@@ -107,21 +116,38 @@ def test_frontend_has_education_memory_panel_contract():
     assert "memory.used_signals" in content
 
 
-def test_frontend_has_education_workbench_route_and_sections():
+def test_frontend_has_education_hub_route_and_sections():
     content = _workspace_page("education/page.tsx").read_text(encoding="utf-8")
-    assert "EducationWorkbenchPage" in content
-    assert "教师工作台" in content
-    assert "课程结果区（对象化视图）" in content
-    assert "工作流编辑器" in content
-    assert "模板市场" in content
-    assert "素材台" in content
-    assert "资源库" in content
-    assert "学生端" in content
-    assert "学生提交" in content
-    assert "选择要提交的任务" in content
-    assert "教师评阅提交" in content
-    assert "选择需要评阅的提交" in content
-    assert "Critic 原因" in content
+    assert "EducationHubPage" in content
+    assert "知识花园" in content
+    assert "统一查看课包、素材、资源库和教学反馈" in content
+    assert "TabsTrigger value=\"packages\"" in content
+    assert "TabsTrigger value=\"assets\"" in content
+    assert "TabsTrigger value=\"resources\"" in content
+    assert "TabsTrigger value=\"feedback\"" in content
+    assert "/workspace/education/resources" in content
+    assert "/workspace/education/students" in content
+
+
+def test_frontend_has_canonical_run_workbench_route():
+    content = _workspace_page("education/runs/[run_id]/page.tsx").read_text(
+        encoding="utf-8",
+    )
+    assert "EducationRunWorkbenchShell" in content
+
+
+def test_frontend_has_run_workbench_components():
+    content = _workspace_component_file(
+        "education/education-run-workbench-shell.tsx",
+    ).read_text(encoding="utf-8")
+    assert "EducationStarterPanel" in content
+    assert "EducationStageRail" in content
+    assert "EducationResultPanel" in content
+    assert "buildEducationStarterPrompt" in content
+    assert "forceEducationStudio" in content
+    assert "disableEducationInfoCards" in content
+    assert "findLatestEducationCards" in content
+    assert "handleCardApply" in content
 
 
 def test_frontend_sidebar_has_education_entry():
@@ -129,7 +155,9 @@ def test_frontend_sidebar_has_education_entry():
         encoding="utf-8",
     )
     assert 'href="/workspace/education"' in content
-    assert "t.sidebar.education" in content
+    assert 'href="/workspace/education/templates"' in content
+    assert "知识花园" in content
+    assert "智能体和工作流" in content
 
 
 def test_frontend_can_render_checkpoint_card_from_plain_ai_text_fallback():
@@ -184,4 +212,21 @@ def test_chat_page_passes_run_id_context_and_bootstrap_call():
     assert "run_id" in content
     assert "bootstrapRun(" in content
     assert "runIdFromQuery" in content
+    assert "runIdFromThread" in content
     assert "ensureEducationBootstrap" in content
+    assert "/workspace/education/runs/" in content
+
+
+def test_message_list_supports_force_education_mode_and_card_toggle():
+    content = _message_component_file("message-list.tsx").read_text(
+        encoding="utf-8",
+    )
+    assert "forceEducationStudio" in content
+    assert "disableEducationInfoCards" in content
+    assert "typeof forceEducationStudio === \"boolean\"" in content
+
+
+def test_frontend_task_brief_card_field_has_key_for_roundtrip_edit():
+    content = _frontend_file("types.ts").read_text(encoding="utf-8")
+    assert "export interface EducationTaskBriefField" in content
+    assert "key: string;" in content

@@ -18,10 +18,11 @@ import {
   updateTemplate,
 } from "./api";
 
-export function useEducationWorkbench() {
+export function useEducationWorkbench(enabled = true) {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["education", "workbench"],
     queryFn: () => loadEducationWorkbenchData(),
+    enabled,
   });
 
   return {

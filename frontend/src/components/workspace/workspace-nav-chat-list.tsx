@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, GraduationCapIcon, MessagesSquare } from "lucide-react";
+import { BookOpenCheckIcon, HammerIcon, NetworkIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -10,19 +10,34 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { useI18n } from "@/core/i18n/hooks";
 
 export function WorkspaceNavChatList() {
-  const { t } = useI18n();
   const pathname = usePathname();
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton isActive={pathname === "/workspace/chats"} asChild>
-            <Link className="text-muted-foreground" href="/workspace/chats">
-              <MessagesSquare />
-              <span>{t.sidebar.chats}</span>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/education")}
+            asChild
+          >
+            <Link className="text-muted-foreground" href="/workspace/education">
+              <BookOpenCheckIcon />
+              <span>知识花园</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/education/templates")}
+            asChild
+          >
+            <Link
+              className="text-muted-foreground"
+              href="/workspace/education/templates"
+            >
+              <NetworkIcon />
+              <span>智能体和工作流</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -32,22 +47,8 @@ export function WorkspaceNavChatList() {
             asChild
           >
             <Link className="text-muted-foreground" href="/workspace/agents">
-              <BotIcon />
-              <span>{t.sidebar.agents}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/education")}
-            asChild
-          >
-            <Link
-              className="text-muted-foreground"
-              href="/workspace/education"
-            >
-              <GraduationCapIcon />
-              <span>{t.sidebar.education}</span>
+              <HammerIcon />
+              <span>技能</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

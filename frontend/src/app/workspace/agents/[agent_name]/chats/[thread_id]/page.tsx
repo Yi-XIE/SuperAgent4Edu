@@ -22,6 +22,7 @@ import {
   decideCheckpoint,
   isEducationAgent,
   updateRun as updateEducationRun,
+  useEducationWorkbench,
   type EducationCheckpoint,
 } from "@/core/education";
 import { useI18n } from "@/core/i18n/hooks";
@@ -47,8 +48,20 @@ export default function AgentChatPage() {
 
   const { threadId, isNewThread, setIsNewThread } = useThreadChat();
   const runIdFromQuery = searchParams.get("run_id");
+  const {
+    data: educationWorkbench,
+    isLoading: isEducationWorkbenchLoading,
+  } = useEducationWorkbench(isEducationStudio && !runIdFromQuery);
+  const runIdFromThread = useMemo(() => {
+    if (!isEducationStudio || runIdFromQuery) {
+      return null;
+    }
+    return (
+      educationWorkbench.runs.find((run) => run.thread_id === threadId)?.id ?? null
+    );
+  }, [educationWorkbench.runs, isEducationStudio, runIdFromQuery, threadId]);
   const educationRunId = isEducationStudio
-    ? (runIdFromQuery ?? threadId)
+    ? (runIdFromQuery ?? runIdFromThread ?? threadId)
     : undefined;
   const bootstrappedRunRef = useRef<string | null>(null);
   const bootstrapPromiseRef = useRef<Promise<void> | null>(null);
@@ -64,6 +77,26 @@ export default function AgentChatPage() {
         : settings.context,
     [isEducationStudio, settings.context],
   );
+
+  useEffect(() => {
+    if (!isEducationStudio) {
+      return;
+    }
+    if (!runIdFromQuery && isEducationWorkbenchLoading) {
+      return;
+    }
+    const canonicalRunId = runIdFromQuery ?? runIdFromThread;
+    if (!canonicalRunId) {
+      return;
+    }
+    router.replace(`/workspace/education/runs/${canonicalRunId}`);
+  }, [
+    isEducationStudio,
+    isEducationWorkbenchLoading,
+    router,
+    runIdFromQuery,
+    runIdFromThread,
+  ]);
 
   useEffect(() => {
     if (!isEducationStudio || !educationRunId) {
@@ -206,6 +239,16 @@ export default function AgentChatPage() {
   const handleStop = useCallback(async () => {
     await thread.stop();
   }, [thread]);
+
+  if (isEducationStudio && (runIdFromQuery || runIdFromThread)) {
+    return (
+      <div className="flex size-full items-center justify-center p-6">
+        <div className="rounded-xl border p-6 text-sm">
+          正在跳转到当前备课主舞台...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ThreadContext.Provider value={{ thread }}>

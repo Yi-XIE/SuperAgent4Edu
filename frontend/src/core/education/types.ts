@@ -59,6 +59,34 @@ export interface EducationCheckpoint {
   rawContent: string;
 }
 
+export type EducationStarterMode = "quick_generate" | "idea_first";
+
+export interface EducationTaskBriefField {
+  key: string;
+  label: string;
+  value: string;
+}
+
+export interface EducationTaskBriefCard {
+  title: string;
+  summary?: string;
+  fields: EducationTaskBriefField[];
+  actions: string[];
+  rawContent: string;
+}
+
+export interface EducationGenerationModeCard {
+  title: string;
+  summary?: string;
+  recommended_mode?: GenerationMode;
+  retrieval_hint?: string;
+  options: Array<{
+    mode: GenerationMode;
+    description: string;
+  }>;
+  rawContent: string;
+}
+
 export interface CourseArtifactManifestEntry {
   label: string;
   path: string;

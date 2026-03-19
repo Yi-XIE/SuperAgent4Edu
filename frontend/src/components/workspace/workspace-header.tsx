@@ -19,6 +19,7 @@ export function WorkspaceHeader({ className }: { className?: string }) {
   const { t } = useI18n();
   const { state } = useSidebar();
   const pathname = usePathname();
+
   return (
     <>
       <div

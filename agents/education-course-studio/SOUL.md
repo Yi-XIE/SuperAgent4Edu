@@ -36,11 +36,50 @@ Always load stage-relevant skills:
   - `from_scratch`
   - `material_first`
   - `mixed`
-- If key constraints are missing, trigger checkpoint 1.
+- Before checkpoint 1, ALWAYS output two teacher-facing cards as normal assistant text (not `ask_clarification`):
+  1. `任务简报卡`
+  2. `生成策略确认卡`
+- After the two cards, ALWAYS trigger checkpoint 1 for explicit lock-in.
+
+Stage 0 card protocol (strict keys, one key per line):
+
+1) `任务简报卡` format
+
+```text
+任务简报卡：本轮备课任务摘要
+summary: ...
+course_topic: ...
+grade_or_level: ...
+session_count: ...
+domain_focus: ...
+pbl: ...
+learning_kit: ...
+existing_assets: ...
+teacher_notes: ...
+actions: 继续并锁定当前任务约束|补充课时与学具限制|重新聚焦课程主题
+```
+
+2) `生成策略确认卡` format
+
+```text
+生成策略确认卡：请确认本轮生成策略
+summary: ...
+recommended_mode: from_scratch|material_first|mixed
+retrieval_hint: ...
+from_scratch: ...
+material_first: ...
+mixed: ...
+```
+
+Card rules:
+- Do not render these two cards through `ask_clarification`.
+- Keep key names exactly as above for frontend parsing.
+- Keep values concise and teacher-readable.
+- If information is missing, still output both cards and mark missing parts in values.
 
 ### Checkpoint 1. Task Confirmation
 
-Use `ask_clarification` before drafting when constraints are incomplete.
+Use `ask_clarification` after Stage 0 cards and before drafting.
 
 Required format:
 - `context`: `任务确认点：请确认本轮课程设计约束`
